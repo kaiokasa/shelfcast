@@ -1,6 +1,6 @@
 # 🛒 Walmart Weekly Sales Forecasting
 
-🇬🇧 **English** | [🇫🇷 Français](README.fr.md)
+**English** | [Français](README.fr.md)
 
 > - **Goal:** forecast the weekly sales of 3,169 store/department pairs across 45 Walmart stores, up to 39 weeks ahead ([Kaggle competition](https://www.kaggle.com/competitions/walmart-recruiting-store-sales-forecasting)).
 > - **Result:** **WMAE 1,818** on a validation year that includes Thanksgiving and Christmas (baseline XGBoost: 2,752 on an easier validation).

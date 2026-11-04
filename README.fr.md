@@ -1,6 +1,6 @@
 # 🛒 Prévision des ventes hebdomadaires Walmart
 
-[🇬🇧 English](README.md) | 🇫🇷 **Français**
+[English](README.md) | **Français**
 
 > - **Objectif :** prévoir les ventes hebdomadaires de 3 169 couples magasin/département dans 45 magasins Walmart, jusqu'à 39 semaines à l'avance ([compétition Kaggle](https://www.kaggle.com/competitions/walmart-recruiting-store-sales-forecasting)).
 > - **Résultat :** **WMAE de 1 818** sur une année de validation qui inclut Thanksgiving et Noël (XGBoost de référence : 2 752, sur une validation plus facile).
