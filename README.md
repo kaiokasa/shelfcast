@@ -49,6 +49,10 @@ An interactive web app is included to explore the data and make predictions.
 # Python 3.11+
 pip install -r requirements.txt
 
+# download the competition data into Data/ (accept the competition rules on Kaggle first)
+kaggle competitions download -c walmart-recruiting-store-sales-forecasting
+unzip walmart-recruiting-store-sales-forecasting.zip -d Data
+
 # run the app
 streamlit run app.py
 ```
@@ -106,7 +110,7 @@ Three improvements tested separately before being adopted in the final model:
 
 ## 📁 Dataset
 
-Data sourced from the [Kaggle Walmart Recruiting - Store Sales Forecasting](https://www.kaggle.com/competitions/walmart-recruiting-store-sales-forecasting) competition.
+Data sourced from the [Kaggle Walmart Recruiting - Store Sales Forecasting](https://www.kaggle.com/competitions/walmart-recruiting-store-sales-forecasting) competition. **The data is not included in this repository**: it belongs to the competition and must be downloaded from Kaggle after accepting its rules (see *How to run* above).
 
 | File                     | Description                                                               |
 | ------------------------ | ------------------------------------------------------------------------- |
@@ -125,7 +129,7 @@ Data sourced from the [Kaggle Walmart Recruiting - Store Sales Forecasting](http
 ```
 Walmart_Weekly_Sales_Forecast/
 │
-├── Data/
+├── Data/                   # not in the repo: download it from Kaggle (see How to run)
 │   ├── train.csv
 │   ├── test.csv
 │   ├── features.csv

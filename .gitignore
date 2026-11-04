@@ -20,3 +20,6 @@ walmart_submission*.csv
 Thumbs.db
 .vscode/
 .idea/
+
+# Kaggle competition data: download it with the Kaggle CLI (see README)
+Data/
