@@ -135,10 +135,12 @@ Walmart_Weekly_Sales_Forecast/
 ├── Notebook.ipynb          # EDA, feature engineering, modeling, evaluation, submission
 ├── Notebook_Experiments.ipynb  # holiday-aware validation, lag features, retraining on all data
 ├── walmart_features.py     # feature engineering shared by the notebook and the app
+├── tests/                  # unit tests for walmart_features.py (python -m pytest)
 ├── app.py                  # Streamlit app (EDA, model performance, prediction)
 ├── walmart_lgbm_model.pkl  # LightGBM component of the final ensemble, trained on all data (2.9 MB)
 ├── model_validation.csv.gz # validation predictions shown in the app
 ├── requirements.txt
+├── pytest.ini
 └── README.md
 ```
 
@@ -255,6 +257,24 @@ On 2012 (never seen in training), the baseline XGBoost's **total weekly sales** 
 * **CPI** has a negative effect, but CPI is regional and almost constant per store, so the model most likely uses it as a **store location proxy**, not as an economic driver.
 * Seasonality comes from `Week_Of_Year` and `Days_to_Thanksgiving`. `Days_to_SuperBowl` and `Days_to_LaborDay` have **zero importance** and could be dropped.
 * Markdowns, Temperature and Fuel_Price have a small impact.
+
+---
+
+## ✅ Tests
+
+`tests/test_walmart_features.py` checks the functions that would fail **silently** if they were wrong (a bad score, not a crash):
+
+* the 52-week lag picks exactly the same week one year earlier (Thanksgiving 2011 ↔ Thanksgiving 2010),
+* lags and store/department statistics only read the history they are given (**no future data leaks**),
+* holiday distances are 0 on the holiday week, missing MarkDowns become 0,
+* the SVD with all components returns the original sales and never invents unobserved weeks,
+* the ensemble is exactly 50% LightGBM + 50% seasonal naive, and the WMAE weighs holiday weeks 5×.
+
+```bash
+python -m pytest     # 16 tests, ~2 seconds, no Kaggle data needed
+```
+
+Shifting the lag by a single week makes 5 of these tests fail.
 
 ---
 

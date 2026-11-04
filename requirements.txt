@@ -13,3 +13,6 @@ xgboost==3.2.0
 shap==0.51.0
 matplotlib==3.10.8
 jupyter
+
+# Tests (python -m pytest)
+pytest
