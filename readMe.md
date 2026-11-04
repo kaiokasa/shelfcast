@@ -33,9 +33,10 @@ Walmart_Weekly_Sales_Forecast/
 │   ├── stores.csv
 │   └── sampleSubmission.csv
 │
-├── Notebook.ipynb         
-├── app.py                
-├── walmart_xgb_model.pkl   
+├── Notebook.ipynb          # EDA, feature engineering, modeling, evaluation, submission
+├── app.py                  # Streamlit app (EDA, model performance, prediction)
+├── walmart_xgb_model.pkl   # trained XGBoost pipeline (preprocessing + model)
+├── requirements.txt
 └── README.md
 ```
 
@@ -51,7 +52,7 @@ Key findings from EDA:
 * **Holiday weeks** generate ~7.13% higher average sales than non-holiday weeks despite being only 10 out of 143 weeks
 * **Markdowns correlate strongly** with sales spikes — promotions visibly drive purchases
 * **Store size** (0.24) is the strongest single correlator with weekly sales
-* Sales **increased from 2010 to 2011** (~$160M) then **decreased in 2012** (~$450M)
+* Yearly totals look like a big drop in 2012, but this is a **data coverage effect**: the training data runs from 2010-02-05 to 2012-10-26, so 2012 is missing its November–December peak. Comparing the same weeks year-over-year is the fair comparison.
 
 ---
 
@@ -101,17 +102,27 @@ Temporal split to avoid data leakage — train on the past, validate on the futu
 
 ## 🤖 Models & Results
 
-| Model                        | MAE             | RMSE            | Val R²          | Train R²        | Gap              |
-| ---------------------------- | --------------- | --------------- | ---------------- | ---------------- | ---------------- |
-| Linear Regression            | 14,299          | 21,118          | 0.0886           | —               | —               |
-| SGD Regressor                | 14,145          | 21,326          | 0.0705           | —               | —               |
-| Decision Tree (default)      | 2,967           | 6,717           | 0.9078           | 1.0000           | 0.0922           |
-| Decision Tree (tuned)        | 4,623           | 8,132           | 0.8648           | 0.8656           | 0.0008           |
-| Random Forest (default)      | 2,272           | 5,003           | 0.9488           | 0.9962           | 0.0474           |
-| Random Forest (tuned)        | 2,332           | 5,148           | 0.9458           | 0.9728           | 0.0270           |
-| AdaBoost                     | 22,726          | 26,874          | -0.4761          | -0.6408          | —               |
-| LightGBM                     | 3,107           | 5,346           | 0.9416           | 0.9539           | 0.0123           |
-| **XGBoost (tuned) 🏆** | **2,732** | **4,829** | **0.9523** | **0.9759** | **0.0236** |
+### Official Kaggle metric: WMAE
+
+The competition is scored with the **Weighted Mean Absolute Error**, where holiday weeks weigh **5×** more than normal weeks:
+
+$$WMAE = \frac{\sum_i w_i \, |y_i - \hat{y}_i|}{\sum_i w_i}, \qquad w_i = 5 \text{ if holiday week, else } 1$$
+
+| Model                    | **WMAE**        | MAE       | RMSE      | Val R²     | Train R²   | Gap        |
+| ------------------------ | --------------- | --------- | --------- | ---------- | ---------- | ---------- |
+| **Random Forest (tuned)** | **2,367** 🥇   | 2,333     | 5,149     | 0.9458     | 0.9728     | 0.0270     |
+| **XGBoost (tuned)**      | 2,752           | 2,732     | **4,829** | **0.9523** 🥇 | 0.9759  | 0.0236     |
+| LightGBM                 | 3,146           | 3,119     | 5,320     | 0.9422     | 0.9553     | 0.0131     |
+| Decision Tree (tuned)    | 4,664           | 4,624     | 8,132     | 0.8648     | 0.8656     | 0.0008     |
+| SGD Regressor            | 14,155          | 14,145    | 21,326    | 0.0705     | —          | —          |
+| Linear Regression        | 14,374          | 14,299    | 21,118    | 0.0886     | —          | —          |
+| AdaBoost                 | 22,599          | 22,727    | 26,874    | -0.4761    | -0.6408    | —          |
+
+*Default (untuned) Decision Tree and Random Forest reached R² of 0.9078 and 0.9488 but overfit (train R² of 1.000 and 0.996).*
+
+**The ranking depends on the metric.** XGBoost wins on R² and RMSE, which square the errors and reward it for handling the few very large sales values better. **Random Forest wins on WMAE and MAE**, the metrics that reflect the error on a typical week and the one Kaggle actually uses.
+
+> ⚠️ **Validation caveat:** the 2012 validation set ends on 2012-10-26, so it contains **no Thanksgiving and no Christmas week**. Its only holiday weeks are the Super Bowl and Labor Day. These scores are therefore optimistic compared to the Kaggle test set (Nov 2012 → Jul 2013), which includes both peaks.
 
 ---
 
@@ -131,7 +142,20 @@ XGBRegressor(
 )
 ```
 
-**XGBoost** emerged as the champion with a val R² of  **0.9523** , explaining 95.23% of the variance in weekly sales, and an MAE of **$2,732** per prediction. The train/val gap of 0.0236 confirms the model generalizes well to unseen data without memorizing the training set.
+**XGBoost** has the best val R² (**0.9523**) and RMSE, with an MAE of **$2,732** and a WMAE of **$2,752**. The train/val gap of 0.0236 confirms the model generalizes well to unseen data. It is the model deployed in the app; **Random Forest** is the better candidate for the Kaggle leaderboard (WMAE 2,367).
+
+---
+
+## 📈 Predictions vs Reality & Explainability
+
+On 2012 (never seen in training), XGBoost's **total weekly sales** across all stores are off by **2.59%** on average. The notebook plots predicted vs actual sales for the whole chain and for individual store/department pairs.
+
+**Feature importance + SHAP** show that:
+
+* **Dept, Size, Store and Type** drive most predictions: *what* is sold and *where* matters far more than anything else.
+* **CPI** has a negative effect, but CPI is regional and almost constant per store, so the model most likely uses it as a **store location proxy**, not as an economic driver.
+* Seasonality comes from `Week_Of_Year` and `Days_to_Thanksgiving`. `Days_to_SuperBowl` and `Days_to_LaborDay` have **zero importance** and could be dropped.
+* Markdowns, Temperature and Fuel_Price have a small impact.
 
 ---
 
@@ -141,7 +165,8 @@ XGBRegressor(
 * **AdaBoost collapsed** (R² = -0.47) due to its sensitivity to extreme sales outliers during holidays
 * **Tree-based models dominate** — a single Decision Tree jumped to R²=0.90, and ensembles pushed it further
 * **XGBoost's built-in regularization** and sequential boosting gave it the edge over all other models
-* **Holiday distance features** (`Days_to_Thanksgiving`, etc.) were among the most impactful engineered features
+* **Engineered holiday features had mixed results**: `Days_to_Thanksgiving` is useful, `Days_to_SuperBowl` and `Days_to_LaborDay` were ignored by the model
+* **The metric changes the winner**: XGBoost is best on R², Random Forest is best on the official WMAE
 * **Temporal train/val split** is critical for time series data — random splits would leak future data and inflate scores
 
 ---
@@ -153,19 +178,30 @@ An interactive web app is included to explore the data and make predictions.
 **Features:**
 
 * **📊 EDA tab** — interactive Plotly charts: weekly sales trends, sales by store type, year-over-year comparison, holiday impact, and markdown vs sales
+* **📈 Model Performance tab** — WMAE / MAE / R² on 2012, actual vs predicted sales for the whole chain and for any store/department, feature importance
 * **🔮 Predict tab** — input store details and get an instant weekly sales prediction from the XGBoost model
 
 **How to run:**
 
 ```bash
-# activate your environment
-conda activate torch-nightly
+# Python 3.11+
+pip install -r requirements.txt
 
 # run the app
-python -m streamlit run app.py
+streamlit run app.py
 ```
 
 Then open `http://localhost:8501` in your browser.
+
+---
+
+## 📤 Kaggle Submission
+
+The last section of the notebook generates `walmart_submission.csv` in the format expected by Kaggle (`Id,Weekly_Sales`, 115,064 rows), with a sanity check against `sampleSubmission.csv`.
+
+```bash
+kaggle competitions submit -c walmart-recruiting-store-sales-forecasting -f walmart_submission.csv -m "XGBoost tuned"
+```
 
 ---
 
@@ -175,7 +211,8 @@ Then open `http://localhost:8501` in your browser.
 | -------------------- | -------------------------------- |
 | `pandas`,`numpy` | Data manipulation                |
 | `scikit-learn`     | Preprocessing, pipelines, models |
-| `xgboost`          | Champion model                   |
+| `xgboost`          | Deployed model                   |
+| `shap`             | Model explainability             |
 | `lightgbm`         | Gradient boosting alternative    |
 | `plotly`           | Interactive EDA visualizations   |
 | `streamlit`        | Web app deployment               |
