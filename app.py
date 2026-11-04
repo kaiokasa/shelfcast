@@ -208,9 +208,10 @@ with tab3:
     if st.button("Predict Weekly Sales 🚀"):
         ensemble, lgbm_part, naive_part = predict_ensemble(model, row, history=df, denoised_history=denoised_history)
         prediction = ensemble[0]
-        st.success(f"### Predicted Weekly Sales: **${prediction:,.2f}**")
-        st.caption(f"= {LGBM_WEIGHT:.0%} × LightGBM (${lgbm_part[0]:,.0f}) + {1 - LGBM_WEIGHT:.0%} × "
-                   f"seasonal naive (${naive_part[0]:,.0f})")
+        # "\$" escapes the dollar sign: two "$" in a Markdown string would be rendered as a LaTeX formula
+        st.success(f"### Predicted Weekly Sales: **\\${prediction:,.2f}**")
+        st.caption(f"= {LGBM_WEIGHT:.0%} × LightGBM (\\${lgbm_part[0]:,.0f}) + {1 - LGBM_WEIGHT:.0%} × "
+                   f"seasonal naive (\\${naive_part[0]:,.0f})")
 
         lags = add_lag_features(row, history=df)
         m1, m2, m3 = st.columns(3)
