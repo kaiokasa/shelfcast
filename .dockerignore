@@ -1,0 +1,18 @@
+# Only the app files are copied into the image (see Dockerfile)
+.git
+.gitignore
+Data/
+*.ipynb
+.ipynb_checkpoints/
+tests/
+pytest.ini
+__pycache__/
+*.py[cod]
+walmart_submission*
+*.xlsx
+README*.md
+requirements.txt
+.venv/
+venv/
+.vscode/
+.idea/

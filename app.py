@@ -7,7 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from walmart_features import (HOLIDAYS, LGBM_WEIGHT, MARKDOWN_COLS, SVD_RANK, add_lag_features,
+from walmart_features import (DATA_DIR, HOLIDAYS, LGBM_WEIGHT, MARKDOWN_COLS, SVD_RANK, add_lag_features,
                               build_base_features, load_raw, predict_ensemble, svd_denoise, wmae)
 
 BASE_DIR = Path(__file__).parent
@@ -34,6 +34,22 @@ def load_model():
 def load_validation():
     return pd.read_csv(VALIDATION_PATH, parse_dates=["Date"])
 
+
+REQUIRED_DATA = ["train.csv", "test.csv", "features.csv", "stores.csv"]
+missing = [f for f in REQUIRED_DATA if not (DATA_DIR / f).exists()]
+if missing:
+    st.title("🛒 Walmart Weekly Sales Predictor")
+    st.error(f"Missing data file(s) in `{DATA_DIR}`: {', '.join(missing)}")
+    st.markdown(
+        "The Kaggle competition data is not included in the repository. Download it first "
+        "(after accepting the competition rules on Kaggle):\n\n"
+        "```bash\n"
+        "kaggle competitions download -c walmart-recruiting-store-sales-forecasting\n"
+        "unzip walmart-recruiting-store-sales-forecasting.zip -d Data\n"
+        "```\n\n"
+        "With Docker, the local `Data/` folder is mounted into the container by `docker compose up`."
+    )
+    st.stop()
 
 df, feature_store, denoised_history = load_data()
 model = load_model()

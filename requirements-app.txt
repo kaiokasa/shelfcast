@@ -1,0 +1,9 @@
+# Libraries needed to run the Streamlit app (used by the Docker image)
+# Versions pinned to match the ones used to train and pickle walmart_lgbm_model.pkl
+pandas==3.0.1
+numpy==2.4.6
+scikit-learn==1.8.0
+lightgbm==4.6.0
+joblib==1.5.3
+plotly==6.6.0
+streamlit==1.56.0

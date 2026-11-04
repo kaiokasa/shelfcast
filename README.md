@@ -61,6 +61,14 @@ streamlit run app.py
 
 Then open `http://localhost:8501` in your browser.
 
+**Or with Docker** (only the app and the trained model go into the image; the local `Data/` folder is mounted read-only):
+
+```bash
+# after downloading the data into Data/ (see above)
+docker compose up -d --build     # build the image and start the app on http://localhost:8501
+docker compose down              # stop it
+```
+
 ---
 
 ## 💡 Key Takeaways
@@ -145,7 +153,10 @@ Walmart_Weekly_Sales_Forecast/
 ├── app.py                  # Streamlit app (EDA, model performance, prediction)
 ├── walmart_lgbm_model.pkl  # LightGBM component of the final ensemble, trained on all data (2.9 MB)
 ├── model_validation.csv.gz # validation predictions shown in the app
-├── requirements.txt
+├── requirements.txt        # everything (app + notebooks + tests)
+├── requirements-app.txt    # app only, used by the Docker image
+├── Dockerfile
+├── docker-compose.yml
 ├── pytest.ini
 ├── README.md               # English version
 └── README.fr.md            # French version
@@ -313,5 +324,6 @@ The ensemble improves the real test score by 6%, confirming the direction seen o
 | `shap`             | Model explainability             |
 | `plotly`           | Interactive EDA visualizations   |
 | `streamlit`        | Web app deployment               |
+| Docker             | Containerized app                |
 | `joblib`           | Model serialization              |
 | CUDA (RTX 5070)      | GPU acceleration for model comparison |

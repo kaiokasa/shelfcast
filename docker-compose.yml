@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    image: walmart-sales-forecast
+    container_name: walmart-sales-forecast
+    ports:
+      - "8501:8501"
+    volumes:
+      # Kaggle competition data, downloaded locally (see README), mounted read-only
+      - ./Data:/app/Data:ro
+    restart: unless-stopped

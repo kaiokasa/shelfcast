@@ -62,6 +62,14 @@ streamlit run app.py
 
 Ouvrez ensuite `http://localhost:8501` dans votre navigateur.
 
+**Ou avec Docker** (l'image ne contient que l'application et le modèle entraîné ; le dossier local `Data/` est monté en lecture seule) :
+
+```bash
+# après avoir téléchargé les données dans Data/ (voir ci-dessus)
+docker compose up -d --build     # construit l'image et lance l'application sur http://localhost:8501
+docker compose down              # l'arrête
+```
+
 ---
 
 ## 💡 À retenir
@@ -146,7 +154,10 @@ Walmart_Weekly_Sales_Forecast/
 ├── app.py                  # application Streamlit (exploration, performance, prédiction)
 ├── walmart_lgbm_model.pkl  # partie LightGBM du modèle final, entraînée sur toutes les données (2,9 Mo)
 ├── model_validation.csv.gz # prédictions de validation affichées dans l'application
-├── requirements.txt
+├── requirements.txt        # tout (application + notebooks + tests)
+├── requirements-app.txt    # application seule, utilisé par l'image Docker
+├── Dockerfile
+├── docker-compose.yml
 ├── pytest.ini
 ├── README.md               # version anglaise
 └── README.fr.md            # version française
@@ -314,5 +325,6 @@ La combinaison améliore le score réel de 6 %, ce qui confirme le sens du gain 
 | `shap`               | Explicabilité du modèle                        |
 | `plotly`             | Graphiques interactifs                         |
 | `streamlit`          | Application web                                |
+| Docker               | Application conteneurisée                      |
 | `joblib`             | Sauvegarde du modèle                           |
 | CUDA (RTX 5070)      | Accélération GPU pour la comparaison des modèles |
