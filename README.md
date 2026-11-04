@@ -39,9 +39,9 @@ An interactive web app is included to explore the data and make predictions.
 
 **Features:**
 
-* **📊 EDA tab**, interactive Plotly charts: weekly sales trends, sales by store type, year-over-year comparison, holiday impact, and markdown vs sales
-* **📈 Model Performance tab**, WMAE / MAE / R² on the holiday-aware validation year, actual vs predicted sales for the whole chain and for any store/department, feature importance
-* **🔮 Predict tab**, pick a store, a department and a week (past or future): store info, external factors and last year's sales are filled in automatically, then the ensemble predicts the weekly sales (with the LightGBM and seasonal naive parts shown)
+* **📊 EDA tab**: interactive Plotly charts: weekly sales trends, sales by store type, year-over-year comparison, holiday impact, and markdown vs sales
+* **📈 Model Performance tab**: WMAE / MAE / R² on the holiday-aware validation year, actual vs predicted sales for the whole chain and for any store/department, feature importance
+* **🔮 Predict tab**: pick a store, a department and a week (past or future): store info, external factors and last year's sales are filled in automatically, then the ensemble predicts the weekly sales (with the LightGBM and seasonal naive parts shown)
 
 **How to run:**
 
@@ -59,15 +59,15 @@ Then open `http://localhost:8501` in your browser.
 
 ## 💡 Key Takeaways
 
-* **Linear models failed completely** (R² ~0.09), the data is highly non-linear due to holiday spikes and complex store interactions
+* **Linear models failed completely** (R² ~0.09): the data is highly non-linear due to holiday spikes and complex store interactions
 * **AdaBoost collapsed** (R² = -0.47) due to its sensitivity to extreme sales outliers during holidays
-* **Tree-based models dominate**, a single Decision Tree jumped to R²=0.90, and ensembles pushed it further
+* **Tree-based models dominate**: a single Decision Tree jumped to R²=0.90, and ensembles pushed it further
 * **Feature engineering beat model choice**: adding the store/department sales level and 52-week lags cut LightGBM's WMAE by 41%, far more than any hyper-parameter or algorithm change
 * **A simple baseline can beat a complex model**: "same week last year" (denoised across stores) beats LightGBM on its own, and averaging the two gives the best result
 * **Engineered holiday features had mixed results**: `Days_to_Thanksgiving` is useful, `Days_to_SuperBowl` and `Days_to_LaborDay` were ignored by the model
 * **The metric changes the winner**: among baseline models, XGBoost is best on R², Random Forest on the official WMAE
 * **The validation window matters**: a validation period without Thanksgiving and Christmas gave optimistic scores
-* **Temporal train/val split** is critical for time series data, random splits would leak future data and inflate scores
+* **Temporal train/val split** is critical for time series data: random splits would leak future data and inflate scores
 
 ---
 
@@ -87,7 +87,7 @@ Three improvements tested separately before being adopted in the final model:
 
 **LightGBM + lags is the best model of the project** (WMAE 2,070, R² 0.9637), and the only one that also improves on Thanksgiving/Christmas weeks (MAE 4,605 → 2,989). Most of the gain comes from the store/department historical level.
 
-**Out-of-fold target encoding.** `Store_Dept_Mean`/`Median` computed in-sample let each training row see its own sales. With out-of-fold encoding (5 folds of weeks), **XGBoost's WMAE drops from 2,645 to 2,061 and its R² recovers from 0.812 to 0.965**: it was over-fitting the leak. LightGBM (+1%) and Random Forest (+3%) are not affected, so the deployed LightGBM is kept as is.
+**Out-of-fold target encoding.** `Store_Dept_Mean`/`Median` computed in-sample let each training row see its own sales. With out-of-fold encoding (5 folds of weeks), **XGBoost's WMAE drops from 2,645 to 2,061 and its R² recovers from 0.812 to 0.965**: it was over-fitting the leak. LightGBM (+1%) and Random Forest (+3%) are not affected, so the LightGBM component of the final model keeps the simpler in-sample encoding.
 
 **Ideas from the competition winner** (David Thaler, [code](https://github.com/davidthaler/Walmart_competition_code)), tested one by one against LightGBM + lags (WMAE 2,068):
 
@@ -148,11 +148,11 @@ Walmart_Weekly_Sales_Forecast/
 
 Key findings from EDA:
 
-* **Sales peak** around weeks 7, 14, 22, 27, 40, 47 and 51, driven by holidays and promotions
+* **Sales peak** around weeks 7, 14, 22, 27, 40, 47 and 51, mostly driven by holidays
 * **Store Type A** dominates sales volume, followed by B and C
 * **Type C stores** show stable, linear sales year-round while A and B stores show sharp seasonal spikes
 * **Holiday weeks** generate ~7.13% higher average sales than non-holiday weeks despite being only 10 out of 143 weeks
-* **Markdowns correlate strongly** with sales spikes, promotions visibly drive purchases
+* **Markdowns move with sales spikes**, but the biggest promotions happen during the holiday season, so part of this link is the calendar itself
 * **Store size** (0.24) is the strongest single correlator with weekly sales
 * Yearly totals look like a big drop in 2012, but this is a **data coverage effect**: the data runs from 2010-02-05 to 2012-10-26, so 2012 is missing its November–December peak. On the **39 weeks present in all three years**, sales are actually **stable** (1,797M$ → 1,786M$ → 1,831M$)
 
@@ -210,19 +210,22 @@ The competition is scored with the **Weighted Mean Absolute Error**, where holid
 
 $$WMAE = \frac{\sum_i w_i \, |y_i - \hat{y}_i|}{\sum_i w_i}, \qquad w_i = 5 \text{ if holiday week, else } 1$$
 
-| Model                    | **WMAE**        | MAE       | RMSE      | Val R²     | Train R²   | Gap        |
-| ------------------------ | --------------- | --------- | --------- | ---------- | ---------- | ---------- |
-| **Random Forest (tuned)** | **2,367** 🥇   | 2,333     | 5,149     | 0.9458     | 0.9728     | 0.0270     |
-| **XGBoost (tuned)**      | 2,752           | 2,732     | **4,829** | **0.9523** 🥇 | 0.9759  | 0.0236     |
-| LightGBM                 | 3,146           | 3,119     | 5,320     | 0.9422     | 0.9553     | 0.0131     |
-| Decision Tree (tuned)    | 4,664           | 4,624     | 8,132     | 0.8648     | 0.8656     | 0.0008     |
-| SGD Regressor            | 14,155          | 14,145    | 21,326    | 0.0705     |,          |,          |
-| Linear Regression        | 14,374          | 14,299    | 21,118    | 0.0886     |,          |,          |
-| AdaBoost                 | 22,599          | 22,727    | 26,874    | -0.4761    | -0.6408    |,          |
+| Model                     | **WMAE**      | MAE    | RMSE      | Val R²         | Train R² | Gap    |
+| ------------------------- | ------------- | ------ | --------- | -------------- | -------- | ------ |
+| **Random Forest (default)** | **2,286** 🥇 | 2,273  | 5,003     | 0.9488         | 0.9962   | 0.0474 |
+| Random Forest (tuned)     | 2,367         | 2,333  | 5,149     | 0.9458         | 0.9728   | 0.0270 |
+| **XGBoost (tuned)**       | 2,752         | 2,732  | **4,829** | **0.9523** 🥇  | 0.9759   | 0.0236 |
+| Decision Tree (default)   | 2,988         | 2,968  | 6,717     | 0.9078         | 1.0000   | 0.0922 |
+| LightGBM                  | 3,149         | 3,122  | 5,324     | 0.9421         | 0.9553   | 0.0132 |
+| XGBoost (default)         | 3,361         | 3,318  | 5,491     | 0.9384         | 0.9470   | 0.0086 |
+| Decision Tree (tuned)     | 4,664         | 4,624  | 8,132     | 0.8648         | 0.8656   | 0.0007 |
+| SGD Regressor             | 14,155        | 14,145 | 21,326    | 0.0705         | 0.0828   | n/a    |
+| Linear Regression         | 14,374        | 14,299 | 21,118    | 0.0886         | 0.0854   | n/a    |
+| AdaBoost                  | 22,599        | 22,727 | 26,875    | -0.4761        | -0.6408  | n/a    |
 
-*Default (untuned) Decision Tree and Random Forest reached R² of 0.9078 and 0.9488 but overfit (train R² of 1.000 and 0.996).*
+*Gap = train R² minus validation R². A large gap means the model memorizes the training data. It is not meaningful for models that fail on both sets.*
 
-**The ranking depends on the metric.** XGBoost wins on R² and RMSE, which square the errors and reward it for handling the few very large sales values better. **Random Forest wins on WMAE and MAE**, the metrics that reflect the error on a typical week and the one Kaggle actually uses.
+**The ranking depends on the metric.** XGBoost wins on R² and RMSE, which square the errors and reward it for handling the few very large sales values better. **Random Forest wins on WMAE and MAE**, the metrics that reflect the error on a typical week and the one Kaggle actually uses. The default Random Forest has the lowest WMAE but also the largest overfitting gap (0.047), so the tuned version is the safer one to compare with XGBoost below.
 
 > ⚠️ **Validation caveat:** the 2012 validation set ends on 2012-10-26, so it contains **no Thanksgiving and no Christmas week**. Its only holiday weeks are the Super Bowl and Labor Day. These scores are therefore optimistic compared to the Kaggle test set (Nov 2012 → Jul 2013), which includes both peaks.
 
@@ -238,7 +241,7 @@ $$WMAE = \frac{\sum_i w_i \, |y_i - \hat{y}_i|}{\sum_i w_i}, \qquad w_i = 5 \tex
 | R² / RMSE | 0.9458 / 5,149 | **0.9523 / 4,829** |
 | Saved model size | 182 MB (64 MB compressed) | **3.9 MB** |
 
-Random Forest wins on the scored metric but is too heavy to deploy comfortably (GitHub's 100 MB file limit, slow loading on Streamlit Cloud). Neither is the final model: the experiments below show that **LightGBM + lag features**, averaged with a seasonal naive forecast, beats both.
+Random Forest wins on the scored metric but is too heavy to deploy comfortably (GitHub's 100 MB file limit, slow loading on Streamlit Cloud). Neither is the final model: the experiments above show that **LightGBM + lag features**, averaged with a seasonal naive forecast, beats both.
 
 ---
 
