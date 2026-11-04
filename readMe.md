@@ -34,6 +34,7 @@ Walmart_Weekly_Sales_Forecast/
 │   └── sampleSubmission.csv
 │
 ├── Notebook.ipynb          # EDA, feature engineering, modeling, evaluation, submission
+├── Notebook_Experiments.ipynb  # holiday-aware validation, lag features, retraining on all data
 ├── app.py                  # Streamlit app (EDA, model performance, prediction)
 ├── walmart_xgb_model.pkl   # trained XGBoost pipeline (preprocessing + model)
 ├── requirements.txt
@@ -52,7 +53,7 @@ Key findings from EDA:
 * **Holiday weeks** generate ~7.13% higher average sales than non-holiday weeks despite being only 10 out of 143 weeks
 * **Markdowns correlate strongly** with sales spikes — promotions visibly drive purchases
 * **Store size** (0.24) is the strongest single correlator with weekly sales
-* Yearly totals look like a big drop in 2012, but this is a **data coverage effect**: the training data runs from 2010-02-05 to 2012-10-26, so 2012 is missing its November–December peak. Comparing the same weeks year-over-year is the fair comparison.
+* Yearly totals look like a big drop in 2012, but this is a **data coverage effect**: the data runs from 2010-02-05 to 2012-10-26, so 2012 is missing its November–December peak. On the **39 weeks present in all three years**, sales are actually **stable** (1,797M$ → 1,786M$ → 1,831M$)
 
 ---
 
@@ -126,7 +127,21 @@ $$WMAE = \frac{\sum_i w_i \, |y_i - \hat{y}_i|}{\sum_i w_i}, \qquad w_i = 5 \tex
 
 ---
 
-## 🏆 Best Model — XGBoost
+## 🏆 Model Choice
+
+**No single model wins everywhere, so the choice depends on the use case:**
+
+| | Random Forest (tuned) | XGBoost (tuned) |
+| --- | --- | --- |
+| WMAE (Kaggle metric) | **2,367** | 2,752 (+16%) |
+| R² / RMSE | 0.9458 / 5,149 | **0.9523 / 4,829** |
+| Saved model size | 182 MB (64 MB compressed) | **3.9 MB** |
+| **Used for** | **Kaggle leaderboard** | **Deployed Streamlit app** |
+
+* **Random Forest** is the right pick for Kaggle: it wins on the metric that is actually scored.
+* **XGBoost** is deployed in the app: its model file is ~47× smaller (182 MB would exceed GitHub's 100 MB file limit and load slowly on Streamlit Cloud), and it is the most accurate on the large sales values. The 16% WMAE gap is the accepted trade-off for a lightweight app.
+
+Deployed XGBoost configuration:
 
 ```python
 XGBRegressor(
@@ -142,7 +157,7 @@ XGBRegressor(
 )
 ```
 
-**XGBoost** has the best val R² (**0.9523**) and RMSE, with an MAE of **$2,732** and a WMAE of **$2,752**. The train/val gap of 0.0236 confirms the model generalizes well to unseen data. It is the model deployed in the app; **Random Forest** is the better candidate for the Kaggle leaderboard (WMAE 2,367).
+Train/val R² gap of 0.0236: the model generalizes well to unseen data.
 
 ---
 
@@ -192,6 +207,26 @@ streamlit run app.py
 ```
 
 Then open `http://localhost:8501` in your browser.
+
+---
+
+## 🧪 Experiments (`Notebook_Experiments.ipynb`)
+
+Three improvements tested separately, without touching the deployed model:
+
+**1. Holiday-aware validation.** New split: train up to 2011-10-28, validate on the next 52 weeks (2011-11-04 → 2012-10-26), which **includes Thanksgiving and Christmas 2011**. Every model's WMAE gets worse (+6% to +18%): the original scores were optimistic.
+
+**2. Lag features** (only lags ≥ 52 weeks, since the Kaggle test set goes up to 39 weeks ahead): sales of the same store/department 52 weeks earlier, their 4-week mean, and the store/department historical mean and median.
+
+| Model (new split) | WMAE base | WMAE + lags | Gain |
+| --- | --- | --- | --- |
+| **LightGBM** | 3,501 | **2,070** | **-41%** |
+| Random Forest | 2,779 | 2,293 | -17% |
+| XGBoost | 2,919 | 2,645 | -9% |
+
+**LightGBM + lags is the best model of the project** (WMAE 2,070, R² 0.9637), and the only one that also improves on Thanksgiving/Christmas weeks (MAE 4,605 → 2,989). Most of the gain comes from the store/department historical level.
+
+**3. Retraining on all data (2010 → 2012)** before predicting the test set. The resulting forecast (`walmart_submission_v2.csv`, not submitted) matches the level of the same season one year earlier, while the original model, which never saw 2012, sits ~5% below it.
 
 ---
 

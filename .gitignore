@@ -9,7 +9,7 @@ venv/
 env/
 
 # Generated outputs (re-created by Notebook.ipynb)
-walmart_submission.csv
+walmart_submission*.csv
 *.xlsx
 
 # Streamlit secrets
