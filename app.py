@@ -7,8 +7,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from walmart_features import (FEATURES, HOLIDAYS, MARKDOWN_COLS, add_lag_features,
-                              build_base_features, load_raw, wmae)
+from walmart_features import (HOLIDAYS, LGBM_WEIGHT, MARKDOWN_COLS, SVD_RANK, add_lag_features,
+                              build_base_features, load_raw, predict_ensemble, svd_denoise, wmae)
 
 BASE_DIR = Path(__file__).parent
 MODEL_PATH = BASE_DIR / "walmart_lgbm_model.pkl"
@@ -22,7 +22,7 @@ def load_data():
     train, _, feature_store = load_raw()
     df = build_base_features(train, feature_store)
     feature_store["Date"] = pd.to_datetime(feature_store["Date"])
-    return df, feature_store
+    return df, feature_store, svd_denoise(df)
 
 
 @st.cache_resource
@@ -35,11 +35,14 @@ def load_validation():
     return pd.read_csv(VALIDATION_PATH, parse_dates=["Date"])
 
 
-df, feature_store = load_data()
+df, feature_store, denoised_history = load_data()
 model = load_model()
+val = load_validation()
+val_wmae = wmae(val["Weekly_Sales"], val["Predicted"], val["IsHoliday"] == 1)
 
 st.title("🛒 Walmart Weekly Sales Predictor")
-st.caption("LightGBM + lag features · WMAE 2,068 on a validation year that includes Thanksgiving & Christmas")
+st.caption(f"Ensemble: {LGBM_WEIGHT:.0%} LightGBM + lag features, {1 - LGBM_WEIGHT:.0%} seasonal naive "
+           f"(SVD rank {SVD_RANK}) · WMAE {val_wmae:,.0f} on a validation year that includes Thanksgiving & Christmas")
 
 tab1, tab2, tab3 = st.tabs(["📊 EDA", "📈 Model Performance", "🔮 Predict"])
 
@@ -91,23 +94,38 @@ with tab2:
     st.caption("Model trained until 2011-10-28 and evaluated on the next 52 weeks (Nov 2011 → Oct 2012), "
                "a full year including Thanksgiving and Christmas. The deployed model is then retrained on all data.")
 
-    val = load_validation()
     err = val["Weekly_Sales"] - val["Predicted"]
     peaks = val["Date"].isin([pd.Timestamp(d) for h in ("Thanksgiving", "Christmas")
                               for d in HOLIDAYS[h].values()])
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("WMAE (Kaggle metric)", f"${wmae(val['Weekly_Sales'], val['Predicted'], val['IsHoliday'] == 1):,.0f}")
+    c1.metric("WMAE (Kaggle metric)", f"${val_wmae:,.0f}")
     c2.metric("MAE", f"${err.abs().mean():,.0f}")
     c3.metric("R²", f"{1 - (err ** 2).sum() / ((val['Weekly_Sales'] - val['Weekly_Sales'].mean()) ** 2).sum():.4f}")
     c4.metric("MAE Thanksgiving/Xmas", f"${err[peaks].abs().mean():,.0f}")
 
+    st.markdown("**Why an ensemble?** Each component alone vs their average:")
+    components = {"LightGBM + lags": "LightGBM", f"Seasonal naive (SVD rank {SVD_RANK})": "Seasonal_Naive",
+                  "Ensemble": "Predicted"}
+    st.dataframe(pd.DataFrame([
+        {"Model": name,
+         "WMAE": wmae(val["Weekly_Sales"], val[col], val["IsHoliday"] == 1),
+         "MAE": (val["Weekly_Sales"] - val[col]).abs().mean(),
+         "MAE Thanksgiving/Xmas": (val["Weekly_Sales"] - val[col])[peaks].abs().mean()}
+        for name, col in components.items()
+    ]).style.format({"WMAE": "{:,.0f}", "MAE": "{:,.0f}", "MAE Thanksgiving/Xmas": "{:,.0f}"}),
+        hide_index=True)
+
     st.subheader("Total weekly sales: actual vs predicted")
-    weekly_val = val.groupby("Date", as_index=False)[["Weekly_Sales", "Predicted"]].sum()
+    weekly_val = val.groupby("Date", as_index=False)[["Weekly_Sales", "Predicted", "LightGBM", "Seasonal_Naive"]].sum()
     fig6 = go.Figure()
-    fig6.add_trace(go.Scatter(x=weekly_val["Date"], y=weekly_val["Weekly_Sales"], name="Actual", line=dict(width=3)))
-    fig6.add_trace(go.Scatter(x=weekly_val["Date"], y=weekly_val["Predicted"], name="Predicted",
-                              line=dict(width=3, dash="dot")))
+    fig6.add_trace(go.Scatter(x=weekly_val["Date"], y=weekly_val["Weekly_Sales"], name="Actual",
+                              line=dict(width=3, color="black")))
+    fig6.add_trace(go.Scatter(x=weekly_val["Date"], y=weekly_val["Predicted"], name="Ensemble", line=dict(width=3)))
+    fig6.add_trace(go.Scatter(x=weekly_val["Date"], y=weekly_val["LightGBM"], name="LightGBM alone",
+                              line=dict(width=1, dash="dot")))
+    fig6.add_trace(go.Scatter(x=weekly_val["Date"], y=weekly_val["Seasonal_Naive"], name="Seasonal naive alone",
+                              line=dict(width=1, dash="dot")))
     fig6.update_layout(yaxis_title="Total Sales ($)", hovermode="x unified", legend=dict(orientation="h"))
     st.plotly_chart(fig6, width="stretch")
 
@@ -123,7 +141,7 @@ with tab2:
     fig7.update_layout(yaxis_title="Weekly Sales ($)", hovermode="x unified", legend=dict(orientation="h"))
     st.plotly_chart(fig7, width="stretch")
 
-    st.subheader("Feature importance")
+    st.subheader("Feature importance (LightGBM component)")
     lgbm = model.named_steps["Model"]
     importance = (pd.DataFrame({"Feature": lgbm.feature_name_,
                                 "Gain": lgbm.booster_.feature_importance(importance_type="gain")})
@@ -170,16 +188,19 @@ with tab3:
     row = build_base_features(row, raw_store)
     for col, value in overrides.items():
         row[col] = np.nan if value is None else value
-    row = add_lag_features(row, history=df)
 
     if st.button("Predict Weekly Sales 🚀"):
-        prediction = model.predict(row[FEATURES])[0]
+        ensemble, lgbm_part, naive_part = predict_ensemble(model, row, history=df, denoised_history=denoised_history)
+        prediction = ensemble[0]
         st.success(f"### Predicted Weekly Sales: **${prediction:,.2f}**")
+        st.caption(f"= {LGBM_WEIGHT:.0%} × LightGBM (${lgbm_part[0]:,.0f}) + {1 - LGBM_WEIGHT:.0%} × "
+                   f"seasonal naive (${naive_part[0]:,.0f})")
 
+        lags = add_lag_features(row, history=df)
         m1, m2, m3 = st.columns(3)
-        lag = row["Sales_Lag_52"].iloc[0]
+        lag = lags["Sales_Lag_52"].iloc[0]
         m1.metric("Same week last year", "n/a" if pd.isna(lag) else f"${lag:,.0f}")
-        m2.metric("Store/Dept average", f"${row['Store_Dept_Mean'].iloc[0]:,.0f}")
+        m2.metric("Store/Dept average", f"${lags['Store_Dept_Mean'].iloc[0]:,.0f}")
         actual = df.loc[(df["Store"] == store) & (df["Dept"] == dept) & (df["Date"] == week), "Weekly_Sales"]
         if len(actual):
             m3.metric("Actual sales", f"${actual.iloc[0]:,.0f}",

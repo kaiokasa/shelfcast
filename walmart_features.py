@@ -99,6 +99,46 @@ def make_lgbm_pipeline(device="cpu"):
     return Pipeline([("Preprocessing", preprocessing), ("Model", model)])
 
 
+# --- Ensemble: LightGBM + SVD-denoised seasonal naive (see Notebook_Experiments.ipynb, section 5) ---
+
+SVD_RANK = 10          # departments' weeks x stores matrices are reduced from 45 to 10 components
+LGBM_WEIGHT = 0.5      # fixed in advance, not tuned on the validation set
+
+
+def svd_denoise(history, k=SVD_RANK):
+    """
+    For each department, replace the weeks x stores sales matrix by its rank-k approximation.
+    Stores share most of a department's seasonality; what is specific to one store is partly noise.
+    """
+    parts = []
+    for dept, g in history.groupby("Dept"):
+        m = g.pivot_table(index="Date", columns="Store", values="Weekly_Sales")
+        observed = m.notna()
+        x = m.fillna(0).values
+        if min(x.shape) > k:
+            u, s, vt = np.linalg.svd(x, full_matrices=False)
+            x = (u[:, :k] * s[:k]) @ vt[:k]
+        denoised = pd.DataFrame(x, index=m.index, columns=m.columns).where(observed)
+        parts.append(denoised.stack().dropna().rename("Weekly_Sales").reset_index().assign(Dept=dept))
+    return pd.concat(parts, ignore_index=True)[["Store", "Dept", "Date", "Weekly_Sales"]]
+
+
+def seasonal_naive(rows, denoised_history):
+    """Same week last year (denoised), falling back on the store/department mean."""
+    v = add_lag_features(rows[["Store", "Dept", "Date"]], history=denoised_history)
+    return v["Sales_Lag_52"].fillna(v["Store_Dept_Mean"]).fillna(0).to_numpy()
+
+
+def predict_ensemble(model, rows, history, denoised_history):
+    """
+    rows: output of build_base_features (no lag features yet).
+    Returns (ensemble, lightgbm, seasonal_naive) predictions, aligned with rows.
+    """
+    lgbm_pred = model.predict(add_lag_features(rows, history=history)[FEATURES])
+    naive_pred = seasonal_naive(rows, denoised_history)
+    return LGBM_WEIGHT * lgbm_pred + (1 - LGBM_WEIGHT) * naive_pred, lgbm_pred, naive_pred
+
+
 def wmae(y_true, y_pred, is_holiday):
     """Official Kaggle metric: holiday weeks weigh 5x."""
     w = np.where(is_holiday, 5, 1)

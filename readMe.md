@@ -3,7 +3,7 @@
 
 A machine learning project to forecast weekly department-level sales across 45 Walmart stores using historical data from 2010–2012.
 
-**Final model: LightGBM + lag features**: **WMAE 2,068** (official Kaggle metric) and **R² 0.964** on a full validation year that includes Thanksgiving and Christmas.
+**Final model: 50% LightGBM + lag features, 50% SVD-denoised seasonal naive forecast**: **WMAE 1,818** (official Kaggle metric) and **R² 0.972** on a full validation year that includes Thanksgiving and Christmas.
 
 ---
 
@@ -39,7 +39,7 @@ Walmart_Weekly_Sales_Forecast/
 ├── Notebook_Experiments.ipynb  # holiday-aware validation, lag features, retraining on all data
 ├── walmart_features.py     # feature engineering shared by the notebook and the app
 ├── app.py                  # Streamlit app (EDA, model performance, prediction)
-├── walmart_lgbm_model.pkl  # final LightGBM pipeline, trained on all data (2.9 MB)
+├── walmart_lgbm_model.pkl  # LightGBM component of the final ensemble, trained on all data (2.9 MB)
 ├── model_validation.csv.gz # validation predictions shown in the app
 ├── requirements.txt
 └── README.md
@@ -141,21 +141,25 @@ $$WMAE = \frac{\sum_i w_i \, |y_i - \hat{y}_i|}{\sum_i w_i}, \qquad w_i = 5 \tex
 | R² / RMSE | 0.9458 / 5,149 | **0.9523 / 4,829** |
 | Saved model size | 182 MB (64 MB compressed) | **3.9 MB** |
 
-Random Forest wins on the scored metric but is too heavy to deploy comfortably (GitHub's 100 MB file limit, slow loading on Streamlit Cloud). Neither is the final model: the experiments below show that **LightGBM + lag features** beats both, with a small model file.
+Random Forest wins on the scored metric but is too heavy to deploy comfortably (GitHub's 100 MB file limit, slow loading on Streamlit Cloud). Neither is the final model: the experiments below show that **LightGBM + lag features**, averaged with a seasonal naive forecast, beats both.
 
-### Final model: LightGBM + lag features
+### Final model: LightGBM + seasonal naive ensemble
 
-| | Value |
-| --- | --- |
-| Validation | Nov 2011 → Oct 2012 (52 weeks, **with Thanksgiving & Christmas**) |
-| **WMAE** | **2,068** |
-| MAE / R² | 1,960 / 0.9637 |
-| MAE on Thanksgiving & Christmas weeks | 2,988 |
-| Model file | 2.9 MB |
+**Prediction = 50% × LightGBM + lag features + 50% × seasonal naive forecast** ("same week last year", on a history denoised by SVD across stores, rank 10).
 
+Validation: Nov 2011 → Oct 2012 (52 weeks, **with Thanksgiving & Christmas**):
+
+| Model | WMAE | MAE | R² | MAE Thanksgiving & Christmas |
+| --- | --- | --- | --- | --- |
+| LightGBM + lags | 2,068 | 1,960 | 0.9637 | 2,988 |
+| Seasonal naive (SVD rank 10) | 1,887 | 1,813 | 0.9703 | 2,500 |
+| **Ensemble 50/50** | **1,818** | **1,764** | **0.9722** | **2,285** |
+
+* The two models make different errors: LightGBM over-estimates the pre-Christmas weeks, the seasonal naive forecast follows last year's pattern closely. Their average beats both.
+* The 50/50 weight is fixed in advance, not tuned on the validation set.
 * Validated on the holiday-aware split, then **retrained on all data (2010 → 2012)** for the app and the submission.
-* Features = base features + `Sales_Lag_52`, `Sales_Lag_52_Mean4`, `Store_Dept_Mean`, `Store_Dept_Median` (see `walmart_features.py`).
-* Trained on CPU in ~5 seconds (same results as on GPU).
+* LightGBM features = base features + `Sales_Lag_52`, `Sales_Lag_52_Mean4`, `Store_Dept_Mean`, `Store_Dept_Median`. All the logic lives in `walmart_features.py`, shared by the notebook and the app.
+* LightGBM trains on CPU in ~10 seconds, and the SVD takes ~1 second.
 
 ```python
 LGBMRegressor(n_estimators=500, learning_rate=0.05, max_depth=8, num_leaves=63,
@@ -183,6 +187,7 @@ On 2012 (never seen in training), the baseline XGBoost's **total weekly sales** 
 * **AdaBoost collapsed** (R² = -0.47) due to its sensitivity to extreme sales outliers during holidays
 * **Tree-based models dominate** — a single Decision Tree jumped to R²=0.90, and ensembles pushed it further
 * **Feature engineering beat model choice**: adding the store/department sales level and 52-week lags cut LightGBM's WMAE by 41%, far more than any hyper-parameter or algorithm change
+* **A simple baseline can beat a complex model**: "same week last year" (denoised across stores) beats LightGBM on its own, and averaging the two gives the best result
 * **Engineered holiday features had mixed results**: `Days_to_Thanksgiving` is useful, `Days_to_SuperBowl` and `Days_to_LaborDay` were ignored by the model
 * **The metric changes the winner**: among baseline models, XGBoost is best on R², Random Forest on the official WMAE
 * **The validation window matters**: a validation period without Thanksgiving and Christmas gave optimistic scores
@@ -198,7 +203,7 @@ An interactive web app is included to explore the data and make predictions.
 
 * **📊 EDA tab** — interactive Plotly charts: weekly sales trends, sales by store type, year-over-year comparison, holiday impact, and markdown vs sales
 * **📈 Model Performance tab** — WMAE / MAE / R² on the holiday-aware validation year, actual vs predicted sales for the whole chain and for any store/department, feature importance
-* **🔮 Predict tab** — pick a store, a department and a week (past or future): store info, external factors and last year's sales are filled in automatically, then LightGBM predicts the weekly sales
+* **🔮 Predict tab** — pick a store, a department and a week (past or future): store info, external factors and last year's sales are filled in automatically, then the ensemble predicts the weekly sales (with the LightGBM and seasonal naive parts shown)
 
 **How to run:**
 
@@ -232,6 +237,15 @@ Three improvements tested separately before being adopted in the final model:
 
 **Out-of-fold target encoding.** `Store_Dept_Mean`/`Median` computed in-sample let each training row see its own sales. With out-of-fold encoding (5 folds of weeks), **XGBoost's WMAE drops from 2,645 to 2,061 and its R² recovers from 0.812 to 0.965**: it was over-fitting the leak. LightGBM (+1%) and Random Forest (+3%) are not affected, so the deployed LightGBM is kept as is.
 
+**Ideas from the competition winner** (David Thaler, [code](https://github.com/davidthaler/Walmart_competition_code)), tested one by one against LightGBM + lags (WMAE 2,068):
+
+| Idea | WMAE | Verdict |
+| --- | --- | --- |
+| Drop external features (CPI, MarkDowns, …) | 2,034 (-1.6%) | small gain, not kept on top of the ensemble |
+| Christmas day-of-week shift | 2,098 to 2,222 | ❌ LightGBM already captures it |
+| SVD-denoised lag features | 2,071 to 2,079 | ➖ neutral for LightGBM |
+| **Average with an SVD seasonal naive forecast** | **1,822 (-12%)** | ✅ **adopted** |
+
 **3. Retraining on all data (2010 → 2012)** before predicting the test set. The resulting forecast matches the level of the same season one year earlier, while the original model, which never saw 2012, sits ~5% below it.
 
 ---
@@ -241,7 +255,7 @@ Three improvements tested separately before being adopted in the final model:
 The last section of `Notebook.ipynb` generates `walmart_submission.csv` with the final model in the format expected by Kaggle (`Id,Weekly_Sales`, 115,064 rows), with a sanity check against `sampleSubmission.csv`.
 
 ```bash
-kaggle competitions submit -c walmart-recruiting-store-sales-forecasting -f walmart_submission.csv -m "LightGBM + lag features"
+kaggle competitions submit -c walmart-recruiting-store-sales-forecasting -f walmart_submission.csv -m "LightGBM + seasonal naive ensemble"
 ```
 
 ---
@@ -252,7 +266,7 @@ kaggle competitions submit -c walmart-recruiting-store-sales-forecasting -f walm
 | -------------------- | -------------------------------- |
 | `pandas`,`numpy` | Data manipulation                |
 | `scikit-learn`     | Preprocessing, pipelines, models |
-| `lightgbm`         | Final model                      |
+| `lightgbm`         | Final model (ensemble component) |
 | `xgboost`          | Baseline model                   |
 | `shap`             | Model explainability             |
 | `plotly`           | Interactive EDA visualizations   |
