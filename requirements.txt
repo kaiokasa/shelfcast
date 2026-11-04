@@ -1,15 +1,15 @@
 # Python 3.11+
-# Versions pinned to match the ones used to train and pickle walmart_xgb_model.pkl
+# Versions pinned to match the ones used to train and pickle walmart_lgbm_model.pkl
 pandas==3.0.1
 numpy==2.4.6
 scikit-learn==1.8.0
-xgboost==3.2.0
+lightgbm==4.6.0
 joblib==1.5.3
 plotly==6.6.0
 streamlit==1.56.0
 
-# Notebook only (not needed by the Streamlit app)
-lightgbm==4.6.0
+# Notebooks only (not needed by the Streamlit app)
+xgboost==3.2.0
 shap==0.51.0
 matplotlib==3.10.8
 jupyter

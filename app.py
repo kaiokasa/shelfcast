@@ -7,73 +7,39 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from walmart_features import (FEATURES, HOLIDAYS, MARKDOWN_COLS, add_lag_features,
+                              build_base_features, load_raw, wmae)
+
 BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / "Data"
-MODEL_PATH = BASE_DIR / "walmart_xgb_model.pkl"
+MODEL_PATH = BASE_DIR / "walmart_lgbm_model.pkl"
+VALIDATION_PATH = BASE_DIR / "model_validation.csv.gz"
 
-MARKDOWN_COLS = ["MarkDown1", "MarkDown2", "MarkDown3", "MarkDown4", "MarkDown5"]
-
-# Same holiday reference dates as in Notebook.ipynb: the model was trained with these
-THANKSGIVING_WEEK = {2010: pd.Timestamp("2010-11-26"), 2011: pd.Timestamp("2011-11-25"),
-                     2012: pd.Timestamp("2012-11-23"), 2013: pd.Timestamp("2013-11-29")}
-CHRISTMAS_WEEK    = {2010: pd.Timestamp("2010-12-31"), 2011: pd.Timestamp("2011-12-30"),
-                     2012: pd.Timestamp("2012-12-28"), 2013: pd.Timestamp("2013-12-27")}
-SUPER_BOWL_WEEK   = {2010: pd.Timestamp("2010-02-12"), 2011: pd.Timestamp("2011-02-11"),
-                     2012: pd.Timestamp("2012-02-10"), 2013: pd.Timestamp("2013-02-08")}
-LABOR_DAY_WEEK    = {2010: pd.Timestamp("2010-09-10"), 2011: pd.Timestamp("2011-09-09"),
-                     2012: pd.Timestamp("2012-09-07"), 2013: pd.Timestamp("2013-09-06")}
-
-
-def days_to_holidays(date: pd.Timestamp) -> dict:
-    return {
-        "Days_to_Thanksgiving": (THANKSGIVING_WEEK[date.year] - date).days,
-        "Days_to_Christmas":    (CHRISTMAS_WEEK[date.year] - date).days,
-        "Days_to_SuperBowl":    (SUPER_BOWL_WEEK[date.year] - date).days,
-        "Days_to_LaborDay":     (LABOR_DAY_WEEK[date.year] - date).days,
-    }
-
-
-def wmae(y_true, y_pred, is_holiday):
-    weights = np.where(is_holiday, 5, 1)
-    return np.sum(weights * np.abs(np.asarray(y_true) - np.asarray(y_pred))) / np.sum(weights)
+EXTERNAL_FACTORS = ["Temperature", "Fuel_Price", "CPI", "Unemployment", *MARKDOWN_COLS]
 
 
 @st.cache_data
-def load_data() -> pd.DataFrame:
-    train = pd.read_csv(DATA_DIR / "train.csv")
-    features = pd.read_csv(DATA_DIR / "features.csv")
-    stores = pd.read_csv(DATA_DIR / "stores.csv")
-
-    feature_store_merged = features.merge(stores, how="inner", on="Store")
-    df = train.merge(feature_store_merged, on=["Store", "Date", "IsHoliday"])
-    df["Date"] = pd.to_datetime(df["Date"])
-    df["Week_Of_Year"] = df["Date"].dt.isocalendar().week.astype(int)
-    df["Year"] = df["Date"].dt.year
-    df[MARKDOWN_COLS] = df[MARKDOWN_COLS].fillna(0)
-    df["IsHoliday"] = df["IsHoliday"].astype(int)
-    holiday_features = pd.DataFrame([days_to_holidays(d) for d in df["Date"]], index=df.index)
-    return pd.concat([df, holiday_features], axis=1)
+def load_data():
+    train, _, feature_store = load_raw()
+    df = build_base_features(train, feature_store)
+    feature_store["Date"] = pd.to_datetime(feature_store["Date"])
+    return df, feature_store
 
 
 @st.cache_resource
 def load_model():
-    model = joblib.load(MODEL_PATH)
-    model.named_steps["Model"].set_params(device="cpu")
-    return model
+    return joblib.load(MODEL_PATH)
 
 
 @st.cache_data
-def validation_predictions(_model, df: pd.DataFrame) -> pd.DataFrame:
-    """Predict 2012, the year the model never saw during training."""
-    val = df[df["Year"] == 2012].copy()
-    val["Predicted"] = _model.predict(val[list(_model.feature_names_in_)])
-    return val
+def load_validation():
+    return pd.read_csv(VALIDATION_PATH, parse_dates=["Date"])
 
 
-df = load_data()
+df, feature_store = load_data()
 model = load_model()
 
 st.title("🛒 Walmart Weekly Sales Predictor")
+st.caption("LightGBM + lag features · WMAE 2,068 on a validation year that includes Thanksgiving & Christmas")
 
 tab1, tab2, tab3 = st.tabs(["📊 EDA", "📈 Model Performance", "🔮 Predict"])
 
@@ -122,18 +88,21 @@ with tab1:
 
 with tab2:
     st.subheader("How good is the model on unseen data?")
-    st.caption("The model was trained on 2010–2011 only. Everything below is measured on 2012.")
+    st.caption("Model trained until 2011-10-28 and evaluated on the next 52 weeks (Nov 2011 → Oct 2012), "
+               "a full year including Thanksgiving and Christmas. The deployed model is then retrained on all data.")
 
-    val = validation_predictions(model, df)
-    abs_err = (val["Weekly_Sales"] - val["Predicted"]).abs()
-    holiday = val["IsHoliday"] == 1
+    val = load_validation()
+    err = val["Weekly_Sales"] - val["Predicted"]
+    peaks = val["Date"].isin([pd.Timestamp(d) for h in ("Thanksgiving", "Christmas")
+                              for d in HOLIDAYS[h].values()])
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("WMAE (Kaggle metric)", f"${wmae(val['Weekly_Sales'], val['Predicted'], holiday):,.0f}")
-    c2.metric("MAE", f"${abs_err.mean():,.0f}")
-    c3.metric("R²", f"{1 - ((val['Weekly_Sales'] - val['Predicted']) ** 2).sum() / ((val['Weekly_Sales'] - val['Weekly_Sales'].mean()) ** 2).sum():.4f}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("WMAE (Kaggle metric)", f"${wmae(val['Weekly_Sales'], val['Predicted'], val['IsHoliday'] == 1):,.0f}")
+    c2.metric("MAE", f"${err.abs().mean():,.0f}")
+    c3.metric("R²", f"{1 - (err ** 2).sum() / ((val['Weekly_Sales'] - val['Weekly_Sales'].mean()) ** 2).sum():.4f}")
+    c4.metric("MAE Thanksgiving/Xmas", f"${err[peaks].abs().mean():,.0f}")
 
-    st.subheader("Total weekly sales in 2012: actual vs predicted")
+    st.subheader("Total weekly sales: actual vs predicted")
     weekly_val = val.groupby("Date", as_index=False)[["Weekly_Sales", "Predicted"]].sum()
     fig6 = go.Figure()
     fig6.add_trace(go.Scatter(x=weekly_val["Date"], y=weekly_val["Weekly_Sales"], name="Actual", line=dict(width=3)))
@@ -155,47 +124,67 @@ with tab2:
     st.plotly_chart(fig7, width="stretch")
 
     st.subheader("Feature importance")
-    feature_names = [n.split("__")[1] for n in model.named_steps["Preprocessing"].get_feature_names_out()]
-    importance = (pd.DataFrame({"Feature": feature_names,
-                                "Importance": model.named_steps["Model"].feature_importances_})
-                  .sort_values("Importance"))
-    fig8 = px.bar(importance, x="Importance", y="Feature", orientation="h")
-    fig8.update_layout(height=550)
+    lgbm = model.named_steps["Model"]
+    importance = (pd.DataFrame({"Feature": lgbm.feature_name_,
+                                "Gain": lgbm.booster_.feature_importance(importance_type="gain")})
+                  .assign(Share=lambda d: d["Gain"] / d["Gain"].sum())
+                  .sort_values("Share"))
+    fig8 = px.bar(importance, x="Share", y="Feature", orientation="h")
+    fig8.update_layout(height=650, xaxis_tickformat=".0%", xaxis_title="Share of total gain")
     st.plotly_chart(fig8, width="stretch")
 
 with tab3:
     st.subheader("Predict Weekly Sales")
-    col1, col2 = st.columns(2)
+    st.caption("Pick a store, a department and a week: store info, external factors and last year's "
+               "sales are filled in automatically from the dataset.")
 
-    with col1:
-        store = st.number_input("Store", min_value=1, max_value=45, value=1)
-        dept = st.number_input("Department", min_value=1, max_value=99, value=1)
-        store_type = st.selectbox("Store Type", ["A", "B", "C"])
-        size = st.number_input("Store Size", min_value=34000, max_value=220000, value=151315)
-        is_holiday = st.selectbox("Is Holiday Week?", [0, 1])
-        year = st.number_input("Year", min_value=2010, max_value=2013, value=2012)
-        week_of_year = st.number_input("Week of Year", min_value=1, max_value=52, value=1)
+    col1, col2, col3 = st.columns(3)
+    store = col1.selectbox("Store", sorted(df["Store"].unique()))
+    dept = col2.selectbox("Department", sorted(df.loc[df["Store"] == store, "Dept"].unique()))
+    store_weeks = feature_store.loc[feature_store["Store"] == store].sort_values("Date")
+    last_known = df["Date"].max()
+    week = col3.selectbox(
+        "Week (ending Friday)", store_weeks["Date"].tolist(),
+        index=int((store_weeks["Date"] <= last_known).sum()),  # first week after the known history
+        format_func=lambda d: d.strftime("%Y-%m-%d") + ("" if d <= last_known else "  (future)"),
+    )
 
-    with col2:
-        temperature = st.number_input("Temperature (°F)", value=60.0)
-        fuel_price = st.number_input("Fuel Price", value=3.5)
-        cpi = st.number_input("CPI", value=211.0)
-        unemployment = st.number_input("Unemployment", value=8.0)
-        markdowns = [st.number_input(md, value=0.0) for md in MARKDOWN_COLS]
+    week_info = store_weeks.loc[store_weeks["Date"] == week].iloc[0]
+    st.markdown(f"**Store type** {week_info['Type']} · **Size** {week_info['Size']:,} sq ft · "
+                f"**Holiday week** {'yes' if week_info['IsHoliday'] else 'no'}")
 
-    # Walmart weeks in the dataset end on a Friday
-    date = pd.Timestamp.fromisocalendar(year, week_of_year, 5)
+    with st.expander("External factors (pre-filled from features.csv, editable)"):
+        e1, e2 = st.columns(2)
+        overrides = {}
+        for i, col in enumerate(EXTERNAL_FACTORS):
+            default = week_info[col]
+            if col in MARKDOWN_COLS and pd.isna(default):
+                default = 0.0
+            overrides[col] = (e1 if i % 2 == 0 else e2).number_input(
+                col, value=None if pd.isna(default) else float(default),
+                key=f"{col}_{store}_{week.date()}")
+
+    row = pd.DataFrame({"Store": [store], "Dept": [dept], "Date": [week.strftime("%Y-%m-%d")],
+                        "IsHoliday": [bool(week_info["IsHoliday"])]})
+    raw_store = feature_store.assign(Date=feature_store["Date"].dt.strftime("%Y-%m-%d"))
+    row = build_base_features(row, raw_store)
+    for col, value in overrides.items():
+        row[col] = np.nan if value is None else value
+    row = add_lag_features(row, history=df)
 
     if st.button("Predict Weekly Sales 🚀"):
-        input_data = pd.DataFrame([{
-            "Store": store, "Dept": dept, "IsHoliday": is_holiday,
-            "Temperature": temperature, "Fuel_Price": fuel_price,
-            **dict(zip(MARKDOWN_COLS, markdowns)),
-            "CPI": cpi, "Unemployment": unemployment,
-            "Type": store_type, "Size": size, "Year": year,
-            "Week_Of_Year": week_of_year,
-            **days_to_holidays(date),
-        }])
-
-        prediction = model.predict(input_data)[0]
+        prediction = model.predict(row[FEATURES])[0]
         st.success(f"### Predicted Weekly Sales: **${prediction:,.2f}**")
+
+        m1, m2, m3 = st.columns(3)
+        lag = row["Sales_Lag_52"].iloc[0]
+        m1.metric("Same week last year", "n/a" if pd.isna(lag) else f"${lag:,.0f}")
+        m2.metric("Store/Dept average", f"${row['Store_Dept_Mean'].iloc[0]:,.0f}")
+        actual = df.loc[(df["Store"] == store) & (df["Dept"] == dept) & (df["Date"] == week), "Weekly_Sales"]
+        if len(actual):
+            m3.metric("Actual sales", f"${actual.iloc[0]:,.0f}",
+                      delta=f"{prediction - actual.iloc[0]:+,.0f} predicted vs actual", delta_color="off")
+            st.info("This week is in the training data: the deployed model has seen it, "
+                    "see the Model Performance tab for an honest evaluation.")
+        else:
+            m3.metric("Actual sales", "unknown (future week)")
