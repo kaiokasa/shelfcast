@@ -1,5 +1,7 @@
 # 🛒 Walmart Weekly Sales Forecasting
 
+🇬🇧 **English** | [🇫🇷 Français](README.fr.md)
+
 > - **Goal:** forecast the weekly sales of 3,169 store/department pairs across 45 Walmart stores, up to 39 weeks ahead ([Kaggle competition](https://www.kaggle.com/competitions/walmart-recruiting-store-sales-forecasting)).
 > - **Result:** **WMAE 1,818** on a validation year that includes Thanksgiving and Christmas (baseline XGBoost: 2,752 on an easier validation).
 > - **Kaggle:** private WMAE **2,885**, public **2,769** (≈ rank 78 of 689 on the public leaderboard, top 11%; late submission, not officially ranked). The gap with our validation most likely comes from test conditions it never covered: Christmas 2012 falls on a Tuesday (a weekday pattern never seen in training) and a third of its rows have missing CPI/unemployment, whereas the calendar period itself explains little (our validation restricted to the same Nov → Jul span only goes from 1,818 to 1,889).
@@ -120,7 +122,7 @@ Data sourced from the [Kaggle Walmart Recruiting - Store Sales Forecasting](http
 | `stores.csv`           | Store type (A, B, C) and size                                             |
 | `sampleSubmission.csv` | Submission format                                                         |
 
-**Final merged training dataset:** 421,570 rows × 25 columns
+**Final merged training dataset:** 421,570 rows
 
 ---
 
@@ -145,7 +147,8 @@ Walmart_Weekly_Sales_Forecast/
 ├── model_validation.csv.gz # validation predictions shown in the app
 ├── requirements.txt
 ├── pytest.ini
-└── README.md
+├── README.md               # English version
+└── README.fr.md            # French version
 ```
 
 ---
@@ -175,7 +178,7 @@ Key findings from EDA:
 | `Days_to_SuperBowl`    | Days until/since Super Bowl   |
 | `Days_to_LaborDay`     | Days until/since Labor Day    |
 
-Dropped columns: `Date`, `Day`, `Month`, `Week_Of_Month` (redundant after feature extraction)
+Month and day of the month are not created, as they would be redundant with `Week_Of_Year`. `Date` is dropped once these features are extracted.
 
 ---
 
