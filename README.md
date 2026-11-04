@@ -2,6 +2,8 @@
 
 **English** | [Français](README.fr.md)
 
+[![CI](https://github.com/kaiokasa/Walmart_Weekly_Sales_Forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/kaiokasa/Walmart_Weekly_Sales_Forecast/actions/workflows/ci.yml)
+
 > - **Goal:** forecast the weekly sales of 3,169 store/department pairs across 45 Walmart stores, up to 39 weeks ahead ([Kaggle competition](https://www.kaggle.com/competitions/walmart-recruiting-store-sales-forecasting)).
 > - **Result:** **WMAE 1,818** on a validation year that includes Thanksgiving and Christmas (baseline XGBoost: 2,752 on an easier validation).
 > - **Kaggle:** private WMAE **2,885**, public **2,769** (≈ rank 78 of 689 on the public leaderboard, top 11%; late submission, not officially ranked). The gap with our validation most likely comes from test conditions it never covered: Christmas 2012 falls on a Tuesday (a weekday pattern never seen in training) and a third of its rows have missing CPI/unemployment, whereas the calendar period itself explains little (our validation restricted to the same Nov → Jul span only goes from 1,818 to 1,889).
@@ -112,6 +114,17 @@ Three improvements tested separately before being adopted in the final model:
 | SVD-denoised lag features | 2,071 to 2,079 | ➖ neutral for LightGBM |
 | **Average with an SVD seasonal naive forecast** | **1,822 (-12%)** | ✅ **adopted** |
 
+**Validation over 3 periods.** To check that these gains are not luck of one validation window, the final model and its two parts are evaluated on 3 windows of 39 weeks (the test horizon):
+
+| Model | Window A | Window B | Window C | Mean ± std |
+| --- | --- | --- | --- | --- |
+| LightGBM + lags | 2,171 | 2,183 | 1,707 | 2,020 ± 271 |
+| Seasonal naive (SVD) | 1,941 | 1,960 | 1,738 | 1,880 ± 123 |
+| **Ensemble 50/50** | **1,875** | **1,889** | **1,635** | **1,799 ± 143** |
+| Ensemble 30/70 | 1,853 | 1,867 | 1,654 | 1,791 ± 119 |
+
+The ensemble beats both of its parts **in every window**. Scores move by about 8% from one window to another, so 1% differences measured on a single period are noise: the 30/70 weighting wins on two windows and loses on the third, which confirms keeping the 50/50 weight fixed in advance.
+
 **3. Retraining on all data (2010 → 2012)** before predicting the test set. The resulting forecast matches the level of the same season one year earlier, while the original model, which never saw 2012, sits ~5% below it.
 
 ---
@@ -156,6 +169,7 @@ Walmart_Weekly_Sales_Forecast/
 ├── requirements.txt        # everything (app + notebooks + tests)
 ├── requirements-app.txt    # app only, used by the Docker image
 ├── Dockerfile
+├── .github/workflows/ci.yml  # CI: tests + Docker build on every push
 ├── docker-compose.yml
 ├── pytest.ini
 ├── README.md               # English version
@@ -293,6 +307,8 @@ python -m pytest     # 16 tests, ~2 seconds, no Kaggle data needed
 ```
 
 Shifting the lag by a single week makes 5 of these tests fail.
+
+**Continuous integration:** a GitHub Action (`.github/workflows/ci.yml`) runs these tests on every push, builds the Docker image and checks that the app starts.
 
 ---
 

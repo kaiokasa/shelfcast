@@ -2,6 +2,8 @@
 
 [English](README.md) | **Français**
 
+[![CI](https://github.com/kaiokasa/Walmart_Weekly_Sales_Forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/kaiokasa/Walmart_Weekly_Sales_Forecast/actions/workflows/ci.yml)
+
 > - **Objectif :** prévoir les ventes hebdomadaires de 3 169 couples magasin/département dans 45 magasins Walmart, jusqu'à 39 semaines à l'avance ([compétition Kaggle](https://www.kaggle.com/competitions/walmart-recruiting-store-sales-forecasting)).
 > - **Résultat :** **WMAE de 1 818** sur une année de validation qui inclut Thanksgiving et Noël (XGBoost de référence : 2 752, sur une validation plus facile).
 > - **Kaggle :** WMAE privé de **2 885**, public de **2 769** (≈ 78e sur 689 au classement public, top 11 % ; soumission tardive, non classée officiellement). L'écart avec notre validation vient très probablement de conditions du test qu'elle ne couvrait pas : Noël 2012 tombe un mardi (jamais vu à l'entraînement) et un tiers des lignes n'ont pas de CPI ni de chômage. La période du calendrier, elle, explique peu de choses (notre validation restreinte à la même période novembre → juillet passe seulement de 1 818 à 1 889).
@@ -113,6 +115,17 @@ Trois améliorations testées séparément avant d'être intégrées au modèle 
 | Décalages calculés sur l'historique débruité par SVD | 2 071 à 2 079 | ➖ neutre pour LightGBM |
 | **Moyenne avec une prévision naïve saisonnière SVD** | **1 822 (-12 %)** | ✅ **adoptée** |
 
+**Validation sur 3 périodes.** Pour vérifier que ces gains ne viennent pas de la chance d'une seule période de validation, le modèle final et ses deux parties sont évalués sur 3 fenêtres de 39 semaines (l'horizon du test) :
+
+| Modèle | Fenêtre A | Fenêtre B | Fenêtre C | Moyenne ± écart-type |
+| --- | --- | --- | --- | --- |
+| LightGBM + décalages | 2 171 | 2 183 | 1 707 | 2 020 ± 271 |
+| Naïve saisonnière (SVD) | 1 941 | 1 960 | 1 738 | 1 880 ± 123 |
+| **Moyenne 50/50** | **1 875** | **1 889** | **1 635** | **1 799 ± 143** |
+| Moyenne 30/70 | 1 853 | 1 867 | 1 654 | 1 791 ± 119 |
+
+La combinaison bat ses deux parties **dans chaque fenêtre**. Les scores varient d'environ 8 % d'une fenêtre à l'autre, donc des écarts de 1 % mesurés sur une seule période relèvent du bruit : la pondération 30/70 gagne sur deux fenêtres et perd sur la troisième, ce qui confirme le choix de garder le poids 50/50 fixé à l'avance.
+
 **3. Réentraînement sur toutes les données (2010 → 2012)** avant de prédire le test. La prévision obtenue retrouve le niveau de la même saison un an plus tôt, alors que le modèle d'origine, qui n'avait jamais vu 2012, était environ 5 % en dessous.
 
 ---
@@ -157,6 +170,7 @@ Walmart_Weekly_Sales_Forecast/
 ├── requirements.txt        # tout (application + notebooks + tests)
 ├── requirements-app.txt    # application seule, utilisé par l'image Docker
 ├── Dockerfile
+├── .github/workflows/ci.yml  # CI : tests + build Docker à chaque push
 ├── docker-compose.yml
 ├── pytest.ini
 ├── README.md               # version anglaise
@@ -294,6 +308,8 @@ python -m pytest     # 16 tests, environ 2 secondes, sans les données Kaggle
 ```
 
 Décaler le décalage d'une seule semaine fait échouer 5 de ces tests.
+
+**Intégration continue :** une GitHub Action (`.github/workflows/ci.yml`) lance ces tests à chaque push, construit l'image Docker et vérifie que l'application démarre.
 
 ---
 
