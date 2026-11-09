@@ -1,8 +1,8 @@
 services:
   app:
     build: .
-    image: walmart-sales-forecast
-    container_name: walmart-sales-forecast
+    image: shelfcast
+    container_name: shelfcast
     ports:
       - "8501:8501"
     volumes:

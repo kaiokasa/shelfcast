@@ -1,8 +1,10 @@
-# 🛒 Prévision des ventes hebdomadaires Walmart
+# 🛒 ShelfCast
+
+**Prévision explicable des ventes Walmart** : des prévisions de ventes hebdomadaires pour 45 magasins, expliquées en langage clair par un LLM local.
 
 [English](README.md) | **Français**
 
-[![CI](https://github.com/kaiokasa/Walmart_Weekly_Sales_Forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/kaiokasa/Walmart_Weekly_Sales_Forecast/actions/workflows/ci.yml)
+[![CI](https://github.com/kaiokasa/shelfcast/actions/workflows/ci.yml/badge.svg)](https://github.com/kaiokasa/shelfcast/actions/workflows/ci.yml)
 
 > - **Objectif :** prévoir les ventes hebdomadaires de 3 169 couples magasin/département dans 45 magasins Walmart, jusqu'à 39 semaines à l'avance ([compétition Kaggle](https://www.kaggle.com/competitions/walmart-recruiting-store-sales-forecasting)).
 > - **Résultat :** **WMAE de 1 818** sur une année de validation qui inclut Thanksgiving et Noël (XGBoost de référence : 2 752, sur une validation plus facile).
@@ -171,7 +173,7 @@ Données issues de la compétition Kaggle [Walmart Recruiting - Store Sales Fore
 ## 📂 Structure du projet
 
 ```
-Walmart_Weekly_Sales_Forecast/
+shelfcast/
 │
 ├── Data/                   # absent du dépôt : à télécharger sur Kaggle (voir Lancer le projet)
 │   ├── train.csv

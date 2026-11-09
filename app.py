@@ -12,6 +12,8 @@ from walmart_explain import (MAX_YEARS_BACK, build_prompt, choose_model, retriev
 from walmart_features import (DATA_DIR, HOLIDAYS, LGBM_WEIGHT, MARKDOWN_COLS, SVD_RANK, build_base_features,
                               features_for_week, load_raw, predict_ensemble, svd_denoise, week_ending, wmae)
 
+st.set_page_config(page_title="ShelfCast", page_icon="🛒")
+
 
 def escape_dollars(text):
     """Two "$" in Markdown are rendered as a LaTeX formula: escape them."""
@@ -45,7 +47,7 @@ def load_validation():
 REQUIRED_DATA = ["train.csv", "test.csv", "features.csv", "stores.csv"]
 missing = [f for f in REQUIRED_DATA if not (DATA_DIR / f).exists()]
 if missing:
-    st.title("🛒 Walmart Weekly Sales Predictor")
+    st.title("🛒 ShelfCast")
     st.error(f"Missing data file(s) in `{DATA_DIR}`: {', '.join(missing)}")
     st.markdown(
         "The Kaggle competition data is not included in the repository. Download it first "
@@ -63,7 +65,7 @@ model = load_model()
 val = load_validation()
 val_wmae = wmae(val["Weekly_Sales"], val["Predicted"], val["IsHoliday"] == 1)
 
-st.title("🛒 Walmart Weekly Sales Predictor")
+st.title("🛒 ShelfCast")
 st.caption(f"Ensemble: {LGBM_WEIGHT:.0%} LightGBM + lag features, {1 - LGBM_WEIGHT:.0%} seasonal naive "
            f"(SVD rank {SVD_RANK}) · WMAE {val_wmae:,.0f} on a validation year that includes Thanksgiving & Christmas")
 

@@ -1,4 +1,4 @@
-# Streamlit app: Walmart weekly sales forecasting
+# ShelfCast: Streamlit app for explainable Walmart sales forecasting
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
