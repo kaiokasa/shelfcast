@@ -1,29 +1,19 @@
 case,question,correct,expected,sql_queries,seconds,answer
-1,How many stores are there of each type?,True,"[22.0, 17.0, 6.0]",1,6.2,"There are 22 stores of type A, 17 of type B, and 6 of type C. The SQL query grouped the stores by their Type column and counted the number of rows in each group."
-2,"Which store is the largest, and what is its size?",True,"[13.0, 219622.0]",1,3.7,"The largest store is Store 13, with a size of 219,622 square feet."
-3,Which department has the highest total sales over the whole dataset?,True,[92.0],2,6.6,"Department 92 has the highest total sales over the whole dataset, with a total of 483943341.87. The SQL query grouped sales by department and summed Weekly_Sales for each department, then ordered by total sales in descending order to find the top performer."
-4,What were the total sales in 2011?,True,[2448200007.350001],4,23.3,"The total sales in 2011 were $2,448,200,007.35 (approximately $2.45 billion). This was calculated by summing all Weekly_Sales values from the sales table for weeks between January 1, 2011 and December 31, 2011. Compared to 2010, this represents an increase of $159,313,886.94 (6.96%), while compared to 2012, it was $448,067,148.00 higher (22.40%)."
-5,Which store type has the highest average weekly sales per square foot?,True,[11.66],3,113.6,"Based on the SQL query results, here are the corrected average weekly sales per square foot by store type:
+1,How many stores are there of each type?,True,"[22.0, 17.0, 6.0]",1,12.5,"There are 22 stores of type A, 17 stores of type B, and 6 stores of type C. The SQL query grouped the stores by their Type column and counted the number of rows in each group."
+2,"Which store is the largest, and what is its size?",True,"[13.0, 219622.0]",1,2.8,"The largest store is Store 13, with a size of 219,622 square feet."
+3,Which department has the highest total sales over the whole dataset?,True,[92.0],1,3.2,"Department 92 has the highest total sales over the whole dataset, with a total of approximately $483.9 million in weekly sales across all weeks and stores."
+4,What were the total sales in 2011?,True,[2448200007.350001],3,10.8,"The total sales in 2011 were $2,448,200,007.35 (approximately $2.45 billion). This was calculated by summing all Weekly_Sales values from the sales table for weeks between January 1, 2011 and December 31, 2011."
+5,Which store type has the highest average weekly sales per square foot?,True,[11.66],1,5.7,"Store type **C** has the highest average weekly sales per square foot at approximately $11.66/sq ft, followed by type B ($8.35/sq ft) and type A ($7.74/sq ft). This was calculated by averaging Store_Sales divided by Size for each store type across all weeks in the dataset."
+6,How much higher are average weekly sales in holiday weeks than in normal weeks?,True,"[81631.51214670029, 1134.3781183416577]",2,10.9,"Average weekly sales in holiday weeks are **$81,631.51 higher** than in normal weeks (holiday average: $1,122,887.89 vs normal average: $1,041,256.38)."
+7,Which 5 stores sold the most during Thanksgiving weeks?,False,"[10.0, 4.0, 20.0, 13.0, 14.0]",2,15.7,"The top 5 stores by Thanksgiving sales were:
 
-| Store Type | Average Weekly Sales Per Sq Ft |
-| :--- | :--- |
-| C | 11.66 |
-| B | 8.35 |
-| A | 7.74 |
+1. **Store 4** (Type A, Size 205,863 sq ft) - $3,004,702 on Nov 25, 2011
+2. **Store 10** (Type B, Size 126,512 sq ft) - $2,950,199 on Nov 25, 2011
+3. **Store 10** (Type B, Size 126,512 sq ft) - $2,939,946 on Nov 26, 2010
+4. **Store 14** (Type A, Size 200,898 sq ft) - $2,921,710 on Nov 26, 2010
+5. **Store 20** (Type A, Size 203,742 sq ft) - $2,906,233 on Nov 25, 2011
 
-**SQL Logic:** The query first groups `store_weeks` by `Type`, calculating the average of `(Store_Sales / Size)` for each store-week combination, then averages these weekly metrics across all weeks and stores within each type to get the final result."
-6,How much higher are average weekly sales in holiday weeks than in normal weeks?,True,"[81631.51214669785, 1134.3781183416577]",2,11.2,"Average weekly sales in holiday weeks are **$81,631.51 higher** than in normal weeks (a 7.84% increase). This is calculated from the query results showing holiday average of $1,122,887.89 versus normal average of $1,041,256.38."
-7,Which 5 stores sold the most during Thanksgiving weeks?,True,"[10.0, 4.0, 20.0, 13.0, 14.0]",2,22.2,"The reviewer is correct - I need to quote the exact numbers from the query result. Let me provide the corrected answer with the exact values:
-
-The top 5 stores by total Thanksgiving sales are:
-
-1. **Store 10** (Type B, Size 126,512 sq ft): $5,890,145.02
-2. **Store 4** (Type A, Size 205,863 sq ft): $5,794,171.78
-3. **Store 20** (Type A, Size 203,742 sq ft): $5,717,867.29
-4. **Store 13** (Type A, Size 219,622 sq ft): $5,630,570.66
-5. **Store 14** (Type A, Size 200,898 sq ft): $5,607,061.52
-
-I summed Store_Sales across all Thanksgiving weeks for each store and ranked them by total sales."
-8,Which store had the highest total sales in 2012?,True,[4.0],1,5.0,"Store 4 had the highest total sales in 2012, with $92,771,189.24. I summed Store_Sales for each store over all weeks in 2012 and ranked them by total."
-9,What was the average temperature during Christmas weeks?,True,[37.2],1,5.2,"The average temperature during Christmas weeks was **37.16°F**. This was calculated by joining the features table (which contains weekly temperatures) with the holiday_weeks table to filter only rows where the holiday is ""Christmas"", then averaging the Temperature values across all matching weeks."
-10,What is the average size of type B stores?,True,[101191.0],1,3.2,"The average size of type B stores is approximately 101,191 square feet. This was calculated by averaging the Size column for all rows where Type equals 'B' in the stores table."
+I joined store_weeks with holiday_weeks to filter Thanksgiving weeks, then ordered by Store_Sales descending and took the top 5. Note that Store 10 appears twice because it had two different Thanksgiving weeks in the dataset (2010 and 2011)."
+8,Which store had the highest total sales in 2012?,True,[4.0],1,4.9,"Store 4 had the highest total sales in 2012, with $92,771,189.24 in total sales across all departments and weeks. I aggregated weekly sales by store for the entire year 2012 and ranked them to find the top performer."
+9,What was the average temperature during Christmas weeks?,True,[37.2],1,4.5,"The average temperature during Christmas weeks was **37.16°F**. This was calculated by joining the features table (which contains weekly temperature data) with the holiday_weeks table to identify all weeks marked as Christmas, then averaging the Temperature values across those weeks."
+10,What is the average size of type B stores?,True,[101191.0],1,3.3,"The average size of type B stores is approximately 101,191 square feet (rounded to the nearest whole number). This was calculated by averaging the Size column for all stores with Type = 'B' in the stores table."

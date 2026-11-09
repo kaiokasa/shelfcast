@@ -21,8 +21,10 @@ statement and returns at most 50 rows.
 Configuration: AGENT_MODEL, otherwise the smallest installed model; OLLAMA_HOST.
 """
 import os
+import re
 
 import duckdb
+import pandas as pd
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -65,6 +67,11 @@ How to work:
    you checked with a query; if you did not check a reason in the data, say so instead of guessing.
 6. Answer in a few sentences. Every number in your answer must come from a query result: never estimate.
    Mention the main SQL logic in one sentence.
+7. If the user asks for a chart, graph or plot, call make_chart with a SELECT query, the chart kind and the
+   columns: "line" for values over time (x = Date), "bar" for a few categories, "barh" for rankings with
+   long labels, "scatter" for the relation between two numeric columns. Keep it readable (at most 30 bars).
+   make_chart accepts up to 500 rows: for values over time, do not add a LIMIT (the whole period is wanted).
+   Then describe what the chart shows in your answer.
 
 Tables: {"; ".join(f"{name} ({note})" for name, note in TABLE_NOTES.items())}.
 Results are limited to {MAX_ROWS} rows: aggregate (SUM, AVG, GROUP BY, ORDER BY ... LIMIT) instead of listing rows."""
@@ -175,7 +182,50 @@ def make_tools(con):
             shown += f"\n... {len(result) - MAX_ROWS} more rows not shown ({len(result)} in total): aggregate instead."
         return shown if len(result) else "The query returned no rows."
 
-    return [list_tables, describe_table, run_sql]
+    @tool(response_format="content_and_artifact")
+    def make_chart(query: str, kind: str, x: str, y: str, title: str) -> tuple[str, bytes | None]:
+        """Draw a chart with matplotlib from one read-only SELECT query.
+        kind: "line", "bar", "barh" or "scatter". x: the column for the x axis (e.g. Date, Type, Store).
+        y: the numeric column(s) to plot, separated by commas. title: a short chart title."""
+        problem = check_query(con, query)
+        if problem:
+            return problem, None
+        try:
+            data = con.execute(query).fetchdf()
+        except duckdb.Error as error:
+            return f"SQL error: {error}", None
+        y_columns = [c.strip() for c in y.split(",") if c.strip()]
+        missing = [c for c in [x, *y_columns] if c not in data.columns]
+        if missing:
+            return f"Unknown column(s) {missing}. The query returns: {list(data.columns)}.", None
+        if kind not in CHART_KINDS:
+            return f"Unknown chart kind '{kind}'. Use one of: {', '.join(CHART_KINDS)}.", None
+        if data.empty or len(data) > MAX_CHART_POINTS:
+            return f"The query returned {len(data)} rows: a chart needs 1 to {MAX_CHART_POINTS}.", None
+        # the data is returned with the chart, so the agent describes it with real numbers: a summary of each
+        # series (so it never has to compute a maximum or an average itself), then the first rows
+        summary = []
+        for column in y_columns:
+            values = data[column]
+            if pd.api.types.is_numeric_dtype(values) and len(values):
+                summary.append(f"- {column}: min {values.min():.2f} (at {x} = {data[x].iloc[values.idxmin()]}), "
+                               f"max {values.max():.2f} (at {x} = {data[x].iloc[values.idxmax()]}), "
+                               f"average {values.mean():.2f}, first {values.iloc[0]:.2f}, last {values.iloc[-1]:.2f}")
+        preview = data[[x, *y_columns]].head(MAX_ROWS).to_string(index=False, float_format=lambda v: f"{v:.2f}")
+        if len(data) > MAX_ROWS:
+            preview += f"\n... {len(data) - MAX_ROWS} more rows are in the chart but not shown here."
+        preview = "Summary:\n" + "\n".join(summary) + "\n\nData:\n" + preview
+        # the chart itself is drawn by walmart_charts.draw_chart when it is displayed (in the app's theme):
+        # the artifact carries the data and the chart specification, never code written by the LLM
+        spec = {"data": data[[x, *y_columns]], "kind": kind, "x": x, "y": y_columns, "title": title}
+        return (f"Chart created: {kind} chart of {', '.join(y_columns)} by {x} ({len(data)} rows). "
+                f"Describe it in the answer, using these values:\n{preview}"), spec
+
+    return [list_tables, describe_table, run_sql, make_chart]
+
+
+CHART_KINDS = ["line", "bar", "barh", "scatter"]
+MAX_CHART_POINTS = 500
 
 
 # ---------------------------------------------------------------- LangGraph agent
@@ -187,6 +237,26 @@ class AgentState(MessagesState):
 MAX_REVIEWS = 2  # each draft is checked; after 2 reviews the answer is shown as it is
 
 
+SCALES = {"thousand": 1e3, "k": 1e3, "million": 1e6, "m": 1e6, "billion": 1e9, "bn": 1e9, "b": 1e9}
+SCALED_NUMBER = re.compile(r"(\d[\d,]*(?:\.(\d+))?)\s*(thousand|million|billion|bn|[kmb])\b", re.IGNORECASE)
+
+
+def numbers_with_tolerance(text):
+    """
+    (raw text, value, tolerance) for every number of a text. "$483.9 million" is 483,900,000 give or take half
+    of its last digit (0.05 million): a rounded figure is accepted, an invented one is not.
+    """
+    found, rest = [], text
+    for match in SCALED_NUMBER.finditer(text):
+        number, decimals, unit = match.groups()
+        scale = SCALES[unit.lower()]
+        found.append((match.group(0), float(number.replace(",", "")) * scale,
+                      0.5 * 10 ** -len(decimals or "") * scale))
+        rest = rest.replace(match.group(0), " ", 1)
+    found += [(raw, value, max(0.5, 0.005 * abs(value))) for raw, value in extract_numbers(rest)]
+    return found
+
+
 def numbers_not_in_results(draft, messages, question):
     """
     Deterministic check (no LLM): every number of the draft must appear in a query result or in the question.
@@ -196,8 +266,28 @@ def numbers_not_in_results(draft, messages, question):
     for text in [question] + [m.content for m in messages if isinstance(m, ToolMessage)]:
         for _, value in extract_numbers(text):
             allowed.update({value, abs(value)})
-    return [raw for raw, value in extract_numbers(draft)
-            if not any(abs(value - a) <= max(0.5, 0.005 * abs(value)) for a in allowed)]
+    for message in messages:  # every value of a chart counts, not only the rows shown to the agent
+        spec = getattr(message, "artifact", None)
+        if isinstance(spec, dict) and "data" in spec:
+            for column in spec["data"].columns:
+                values = spec["data"][column]
+                if pd.api.types.is_numeric_dtype(values):
+                    allowed.update(values.abs().tolist())
+                elif pd.api.types.is_datetime64_any_dtype(values):
+                    allowed.update(float(part) for date in values for part in (date.year, date.month, date.day))
+    return [raw for raw, value, tolerance in numbers_with_tolerance(draft)
+            if not any(abs(value - a) <= tolerance for a in allowed)]
+
+
+CHART_WORDS = re.compile(r"\b(chart|graph|plot|visuali[sz]e|histogram|diagram)", re.IGNORECASE)
+
+
+def chart_missing(question, messages):
+    """Deterministic check: the user asked for a chart, but no chart was created."""
+    asked = bool(CHART_WORDS.search(question))
+    made = any(isinstance(m, ToolMessage) and m.name == "make_chart" and getattr(m, "artifact", None)
+               for m in messages)
+    return asked and not made
 
 
 def normalize_sql(query):
@@ -243,9 +333,11 @@ def build_agent(llm, tools):
         question = next(m.content for m in messages if isinstance(m, HumanMessage))
         draft = messages[-1].content
         reviews = state.get("reviews", 0) + 1
-        # 1. deterministic check first: numbers that appear in no query result
+        # 1. deterministic checks first: a requested chart that was not made, numbers that appear in no result
         unsupported = numbers_not_in_results(draft, messages, question)
-        if unsupported:
+        if chart_missing(question, messages):
+            verdict = "The user asked for a chart, but no chart was created: call make_chart."
+        elif unsupported:
             verdict = (f"These numbers do not appear in any query result: {', '.join(unsupported)}. Compute them "
                        "with SQL (differences, percentages and averages included) and quote the result exactly.")
         else:
@@ -255,7 +347,8 @@ def build_agent(llm, tools):
             if verdict.upper().startswith("APPROVED"):
                 return {"reviews": reviews}
         feedback = HumanMessage(f"A reviewer found problems in your draft answer:\n{verdict}\n"
-                                "Fix them (run new queries if needed), then write the corrected answer.")
+                                "Fix them (run new queries if needed), then write the corrected answer for the "
+                                "user. Do not mention this review in the answer.")
         return {"reviews": reviews, "messages": [feedback]}
 
     def after_agent(state: AgentState):
@@ -293,6 +386,8 @@ def ask(agent, question, max_steps=MAX_STEPS):
       ("tool_call", tool_name, arguments) / ("tool_result", tool_name, text)
       ("draft", text, None): an answer written by the agent, before review
       ("review", "approved" or "problems", text): the reviewer's verdict
+      ("chart", spec, None): a chart made by make_chart: {data, kind, x, y, title}, drawn with
+                             walmart_charts.draw_chart(**spec, theme=...)
       ("answer", text, None): the final answer, always the last step
     """
     from langgraph.errors import GraphRecursionError
@@ -316,6 +411,8 @@ def ask(agent, question, max_steps=MAX_STEPS):
                         yield "draft", draft, None
                     else:
                         yield "tool_result", message.name, message.content
+                        if getattr(message, "artifact", None):  # a chart made by make_chart (its specification)
+                            yield "chart", message.artifact, None
     except GraphRecursionError:
         final = final or ("I could not reach a reliable answer within the step limit. "
                           "Try a more specific question.")

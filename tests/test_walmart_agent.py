@@ -8,6 +8,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
 from walmart_agent import ask, build_agent, build_database, check_query, make_tools
+from walmart_charts import THEMES, compact, draw_chart, nice_ticks, readable
 
 
 @pytest.fixture
@@ -82,6 +83,85 @@ def test_no_file_can_be_read_even_with_a_select(tools, data_dir):
 def test_large_results_are_truncated(tools):
     result = tools["run_sql"].invoke({"query": "SELECT * FROM range(80)"})
     assert "30 more rows not shown (80 in total)" in result
+
+
+# ---------------------------------------------------------------- charts
+
+def chart(tools, **args):
+    message = tools["make_chart"].invoke({"type": "tool_call", "id": "1", "name": "make_chart", "args": args})
+    return message.content, message.artifact
+
+
+def test_make_chart_returns_the_data_and_a_chart_spec_that_draws_in_both_themes(tools):
+    for kind in ["line", "bar", "barh", "scatter"]:
+        text, spec = chart(tools, query="SELECT Date, SUM(Weekly_Sales) AS total FROM sales GROUP BY Date",
+                           kind=kind, x="Date", y="total", title="Total sales")
+        assert text.startswith("Chart created") and "190.00" in text, kind  # the values go back to the agent
+        assert spec["kind"] == kind and spec["y"] == ["total"] and len(spec["data"]) == 2
+        for theme in ["light", "dark"]:
+            fig = draw_chart(**spec, theme=theme)
+            assert len(fig.data) == 1 and fig.layout.paper_bgcolor == THEMES[theme]["surface"], (kind, theme)
+            assert fig.data[0].hovertemplate, kind  # every chart is interactive: a tooltip on each mark
+
+
+def test_interactive_details_of_each_chart_kind():
+    data = pd.DataFrame({"Dept": [92, 95, 38], "total": [4.8e8, 4.5e8, 3.9e8]})
+    line = draw_chart(pd.DataFrame({"Date": ["2010-02-05", "2010-02-12"], "total": [1.0, 2.0]}), "line", "Date",
+                      "total", "Sales")
+    assert line.layout.hovermode == "x unified" and line.layout.xaxis.showspikes  # crosshair + tooltip
+    bars = draw_chart(data, "barh", "Dept", "total", "Top departments")
+    assert bars.layout.yaxis.autorange == "reversed"                      # #1 of the ranking on top
+    assert list(bars.data[0].text) == ["480M", "450M", "390M"]            # direct value labels
+    assert bars.layout.xaxis.range[1] >= 4.8e8                             # no bar above the last gridline
+
+
+def test_charts_with_several_series_have_a_legend():
+    data = pd.DataFrame({"Year": [2010, 2011], "Type_A": [1.5e9, 1.6e9], "Type_B": [7e8, 7.3e8]})
+    fig = draw_chart(data, "bar", "Year", ["Type_A", "Type_B"], "Sales by type")
+    assert len(fig.data) == 2 and fig.layout.showlegend
+    assert [trace.name for trace in fig.data] == ["Type A", "Type B"]
+    assert fig.data[0].marker.color != fig.data[1].marker.color
+
+
+def test_compact_numbers_ticks_and_readable_labels():
+    assert [compact(v) for v in [7.74, 950, 12_500, 2_450_000, 2_448_200_007]] == [
+        "7.74", "950", "12.5K", "2.5M", "2.4B"]
+    assert nice_ticks(7.7, 11.66)[1] == ["0.0", "2.5", "5.0", "7.5", "10.0", "12.5"]  # one style per axis
+    assert nice_ticks(0, 483_943_341)[1] == ["0", "100M", "200M", "300M", "400M", "500M"]
+    assert readable("Total_Sales") == "Total Sales" and readable("Type_A") == "Type A"
+
+
+def test_make_chart_refuses_writes_unknown_columns_and_kinds(tools):
+    assert chart(tools, query="DROP TABLE sales", kind="bar", x="a", y="b", title="t") == (
+        "Only SELECT queries are allowed (read-only access).", None)
+    text, png = chart(tools, query="SELECT Type FROM stores", kind="bar", x="Type", y="Size", title="t")
+    assert text.startswith("Unknown column") and png is None
+    text, png = chart(tools, query="SELECT Type, Size FROM stores", kind="pie", x="Type", y="Size", title="t")
+    assert text.startswith("Unknown chart kind") and png is None
+
+
+def test_too_many_points_are_refused(tools):
+    text, png = chart(tools, query="SELECT range AS x, range AS y FROM range(600)", kind="line", x="x", y="y",
+                      title="t")
+    assert "600 rows" in text and png is None
+
+
+# ---------------------------------------------------------------- deterministic checks
+
+def test_numbers_with_units_accept_rounding_but_not_invention():
+    from walmart_agent import numbers_with_tolerance
+    found = {raw: (value, tol) for raw, value, tol in numbers_with_tolerance("$483.9 million, then $40 million")}
+    value, tol = found["483.9 million"]
+    assert abs(483_943_341 - value) <= tol           # rounded figure: accepted
+    value, tol = found["40 million"]
+    assert abs(40_432_519 - value) <= tol            # "40 million" for 40.4 million: accepted
+    assert not abs(48_000_000 - value) <= tol        # 48 million would be a different figure
+
+
+def test_a_requested_chart_must_be_made():
+    from walmart_agent import chart_missing
+    assert chart_missing("Plot the 10 best departments", [])
+    assert not chart_missing("Which store is the largest?", [])
 
 
 # ---------------------------------------------------------------- LangGraph loop
@@ -182,6 +262,36 @@ def test_a_good_draft_is_kept_if_the_corrected_answer_comes_back_empty(con):
         AIMessage(content="APPROVED"),
     ])
     assert steps[-1] == ("answer", "There are 4 rows.", None)
+
+
+def test_a_chart_drawn_by_the_agent_reaches_the_app(con):
+    steps = run(con, [
+        AIMessage(content="", tool_calls=[{"name": "make_chart", "id": "1", "args": {
+            "query": "SELECT Store, SUM(Weekly_Sales) AS total FROM sales GROUP BY Store", "kind": "bar",
+            "x": "Store", "y": "total", "title": "Sales by store"}}]),
+        AIMessage(content="Store 1 sold 250 and store 2 sold 90."),
+        AIMessage(content="APPROVED"),
+    ], question="Plot the total sales of each store.")
+
+    charts = [payload for kind, payload, _ in steps if kind == "chart"]
+    assert len(charts) == 1 and len(draw_chart(**charts[0]).data) == 1
+    assert steps[-1] == ("answer", "Store 1 sold 250 and store 2 sold 90.", None)
+
+
+def test_the_review_sends_the_agent_back_when_a_requested_chart_is_missing(con):
+    steps = run(con, [
+        sql_call("SELECT COUNT(*) AS n FROM sales", "1"),
+        AIMessage(content="There are 4 rows."),                  # no chart, although one was asked for
+        AIMessage(content="", tool_calls=[{"name": "make_chart", "id": "2", "args": {
+            "query": "SELECT Date, SUM(Weekly_Sales) AS total FROM sales GROUP BY Date", "kind": "line",
+            "x": "Date", "y": "total", "title": "Sales"}}]),
+        AIMessage(content="The chart shows total sales by week; there are 4 rows."),
+        AIMessage(content="APPROVED"),
+    ], question="Show a chart of the sales.")
+
+    review = next(step for step in steps if step[0] == "review")
+    assert review[1] == "problems" and "no chart was created" in review[2]
+    assert any(kind == "chart" for kind, _, _ in steps)
 
 
 def test_an_empty_answer_is_never_shown(con):

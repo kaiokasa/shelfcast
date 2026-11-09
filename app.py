@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from walmart_agent import ask, build_agent, build_database, make_llm, make_tools
+from walmart_charts import CHART_CONFIG, draw_chart
 from walmart_explain import (MAX_YEARS_BACK, build_prompt, choose_model, retrieve_facts, stream_explanation,
                              template_explanation, verify_numbers, when)
 from walmart_features import (DATA_DIR, HOLIDAYS, LGBM_WEIGHT, MARKDOWN_COLS, SVD_RANK, build_base_features,
@@ -308,13 +309,16 @@ with tab4:
             st.info("The agent needs a local LLM: install Ollama and pull a model that supports tools "
                     "(e.g. `ollama pull qwen3.5:9b`).")
         else:
-            answer, queries = None, 0
+            answer, queries, charts = None, 0, []
             with st.status("The agent is working...", expanded=True) as status:
                 for kind, name, payload in ask(agent, question.strip()):
-                    if kind == "tool_call" and name == "run_sql":
+                    if kind == "tool_call" and name in ("run_sql", "make_chart"):
                         queries += 1
-                        st.markdown(f"**SQL query {queries}**")
+                        label = "SQL query" if name == "run_sql" else f"Chart ({payload.get('kind')}) from SQL query"
+                        st.markdown(f"**{label} {queries}**")
                         st.code(payload.get("query", ""), language="sql")
+                    elif kind == "chart":
+                        charts.append(name)
                     elif kind == "tool_call":
                         st.markdown(f"🔧 `{name}`" + (f" ({payload.get('table')})" if payload.get("table") else ""))
                     elif kind == "tool_result":
@@ -333,6 +337,10 @@ with tab4:
                 status.update(label=f"Done: {queries} SQL quer{'y' if queries == 1 else 'ies'}", state="complete",
                               expanded=False)
             st.markdown("#### Answer")
+            theme = "light" if getattr(st.context.theme, "type", "dark") == "light" else "dark"
+            for chart in charts:
+                # theme=None: keep our palette and styling instead of Streamlit's Plotly theme
+                st.plotly_chart(draw_chart(**chart, theme=theme), theme=None, config=CHART_CONFIG, width="stretch")
             st.markdown(escape_dollars(answer or "No answer."))
             st.caption(f"Answered by {agent_model} (local LLM via Ollama) with LangGraph. "
                        "Open the steps above to check every query and its result.")
