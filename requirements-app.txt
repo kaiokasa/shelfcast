@@ -7,3 +7,8 @@ lightgbm==4.6.0
 joblib==1.5.3
 plotly==6.6.0
 streamlit==1.56.0
+
+# "Ask the data" tab: LangGraph SQL agent with a local LLM (Ollama)
+langgraph==1.2.20
+langchain-ollama==1.1.0
+duckdb==2.0.0

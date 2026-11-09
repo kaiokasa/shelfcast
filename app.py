@@ -7,6 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from walmart_agent import ask, build_agent, build_database, make_llm, make_tools
 from walmart_explain import (MAX_YEARS_BACK, build_prompt, choose_model, retrieve_facts, stream_explanation,
                              template_explanation, verify_numbers, when)
 from walmart_features import (DATA_DIR, HOLIDAYS, LGBM_WEIGHT, MARKDOWN_COLS, SVD_RANK, build_base_features,
@@ -39,6 +40,15 @@ def load_model():
     return joblib.load(MODEL_PATH)
 
 
+@st.cache_resource
+def load_agent():
+    """The LangGraph SQL agent: in-memory read-only database + local LLM. (None, None) without Ollama."""
+    llm, name = make_llm()
+    if llm is None:
+        return None, None
+    return build_agent(llm, make_tools(build_database())), name
+
+
 @st.cache_data
 def load_validation():
     return pd.read_csv(VALIDATION_PATH, parse_dates=["Date"])
@@ -69,7 +79,7 @@ st.title("🛒 ShelfCast")
 st.caption(f"Ensemble: {LGBM_WEIGHT:.0%} LightGBM + lag features, {1 - LGBM_WEIGHT:.0%} seasonal naive "
            f"(SVD rank {SVD_RANK}) · WMAE {val_wmae:,.0f} on a validation year that includes Thanksgiving & Christmas")
 
-tab1, tab2, tab3 = st.tabs(["📊 EDA", "📈 Model Performance", "🔮 Predict"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 EDA", "📈 Model Performance", "🔮 Predict", "💬 Ask the data"])
 
 with tab1:
     st.subheader("Total Weekly Sales by Week of Year")
@@ -283,3 +293,46 @@ with tab3:
         st.caption(cache[key][1])
         with st.expander("Facts retrieved for this explanation"):
             st.json(facts)
+
+with tab4:
+    st.subheader("Ask the data")
+    st.caption("An AI agent (LangGraph + local LLM) answers your question by writing SQL itself: it looks at the "
+               "tables, runs queries, reads the results or the errors, fixes its queries, and answers when it has "
+               "enough evidence. Read-only access to the sales, features and stores tables.")
+
+    question = st.text_area("Your question", height=80)
+
+    if st.button("Ask 🔎", disabled=not question.strip()):
+        agent, agent_model = load_agent()
+        if agent is None:
+            st.info("The agent needs a local LLM: install Ollama and pull a model that supports tools "
+                    "(e.g. `ollama pull qwen3.5:9b`).")
+        else:
+            answer, queries = None, 0
+            with st.status("The agent is working...", expanded=True) as status:
+                for kind, name, payload in ask(agent, question.strip()):
+                    if kind == "tool_call" and name == "run_sql":
+                        queries += 1
+                        st.markdown(f"**SQL query {queries}**")
+                        st.code(payload.get("query", ""), language="sql")
+                    elif kind == "tool_call":
+                        st.markdown(f"🔧 `{name}`" + (f" ({payload.get('table')})" if payload.get("table") else ""))
+                    elif kind == "tool_result":
+                        with st.expander(f"Result of {name}", expanded=name == "run_sql"):
+                            st.text(payload)
+                    elif kind == "draft" and name:
+                        with st.expander("Draft answer (before review)"):
+                            st.markdown(escape_dollars(name))
+                    elif kind == "review" and name == "approved":
+                        st.markdown("✅ **Review:** the answer matches the queries and their results.")
+                    elif kind == "review":
+                        st.markdown("🔁 **Review found problems, the agent is fixing its answer:**")
+                        st.text(payload)
+                    elif kind == "answer":
+                        answer = name
+                status.update(label=f"Done: {queries} SQL quer{'y' if queries == 1 else 'ies'}", state="complete",
+                              expanded=False)
+            st.markdown("#### Answer")
+            st.markdown(escape_dollars(answer or "No answer."))
+            st.caption(f"Answered by {agent_model} (local LLM via Ollama) with LangGraph. "
+                       "Open the steps above to check every query and its result.")

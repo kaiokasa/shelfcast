@@ -48,6 +48,7 @@ An interactive web app is included to explore the data and make predictions.
 * **📊 EDA tab**: interactive Plotly charts: weekly sales trends, sales by store type, year-over-year comparison, holiday impact, and markdown vs sales
 * **📈 Model Performance tab**: WMAE / MAE / R² on the holiday-aware validation year, actual vs predicted sales for the whole chain and for any store/department, feature importance
 * **🔮 Predict tab**: pick a store, a department and **any date** (past, or future up to 2040): store info, external factors and past sales are filled in automatically. After the end of the data, external factors are estimated, past sales come from the same week of the most recent year with data (aligned on holidays: Thanksgiving 2016 is compared with Thanksgiving 2011), and the AI explanation mentions that the forecast is less certain the further ahead it goes. The ensemble then predicts the weekly sales (with the LightGBM and seasonal naive parts shown), and an **AI assistant explains the prediction** (see below)
+* **💬 Ask the data tab**: ask a question in plain English; an AI agent writes and runs SQL to answer it, showing every query (see below)
 
 **How to run:**
 
@@ -109,6 +110,37 @@ Results per case in `evaluation/rag_evaluation_qwen3.5_9b.csv`. Limit: the check
 python evaluate_rag.py                     # 200 cases with the smallest installed model
 python evaluate_rag.py --model qwen3.5:27b --n 50
 python evaluate_rag.py --recheck           # re-verify saved explanations without calling the LLM
+```
+
+---
+
+## 💬 Ask the data: SQL agent (agentic AI with LangGraph)
+
+The **💬 Ask the data** tab answers open questions about the dataset ("Which 5 stores sold the most during Thanksgiving weeks?") with an **agent built with LangGraph** that writes and runs SQL itself (`walmart_agent.py`):
+
+```
+question -> [agent] --tool call--> [tools] --result or error--> [agent] --> ... --draft answer--> [review]
+               ^                                                                                    |
+               +-------------------------------- problems found -----------------------------------+
+                                                                              approved --> answer
+```
+
+* **agent**: the local LLM (Ollama) decides what to do next, with 3 tools: `list_tables`, `describe_table`, `run_sql`. When a query fails, it reads the error and fixes the query.
+* **review**: before answering, a deterministic check verifies that **every number of the answer appears in a query result** (a figure the LLM computed itself must be computed in SQL instead), then the LLM reviews the logic (data grain, weekly averages, aligned periods). Each answer is reviewed at most twice.
+* **semantic layer**: besides the raw tables, `store_weeks` (one row per store and week, departments already summed) and `holiday_weeks` (the name of each holiday week) prevent the most frequent mistakes of a small model.
+* **safety**: the CSV files are loaded into an **in-memory DuckDB database, then file access is disabled and the configuration locked**. Only one `SELECT` per query is accepted (no `INSERT`, `DELETE`, `DROP`, `COPY`, `SET`), results are capped at 50 rows, repeating the same query is refused, and the number of steps is limited.
+* **transparency**: every SQL query and its result is shown in the app, so the answer can be checked.
+
+**Evaluation** (`evaluate_agent.py`): 10 questions whose expected answer is recomputed with a reference SQL query at every run.
+
+| Model | Correct answers | Median time |
+| --- | --- | --- |
+| qwen3.5:9b | **10 / 10** (9 / 10 before adding the "each store appears once in a ranking" rule) | 6 s |
+
+Limits: 10 questions is a small benchmark, one rule was added after seeing a failure on it, and an LLM can vary from one run to the next. Ambiguous questions (e.g. growth between two years when the periods can be split in several ways) can get different valid answers. `qwen3.5:27b` was tested and was not more accurate, while being 10 to 20 times slower.
+
+```bash
+python evaluate_agent.py --model qwen3.5:9b
 ```
 
 ---
@@ -204,7 +236,9 @@ shelfcast/
 ├── walmart_features.py     # feature engineering shared by the notebook and the app
 ├── walmart_explain.py      # RAG explanation of a prediction (retrieval + local LLM via Ollama + faithfulness check)
 ├── evaluate_rag.py         # measures invented figures in the explanations over 200 random predictions
-├── evaluation/             # evaluation results, one row per explanation
+├── walmart_agent.py        # SQL agent built with LangGraph (read-only DuckDB database, review step)
+├── evaluate_agent.py       # measures the agent's accuracy on questions with reference SQL answers
+├── evaluation/             # evaluation results (RAG explanations and SQL agent)
 ├── tests/                  # unit tests for walmart_features.py (python -m pytest)
 ├── app.py                  # Streamlit app (EDA, model performance, prediction)
 ├── walmart_lgbm_model.pkl  # LightGBM component of the final ensemble, trained on all data (2.9 MB)
@@ -347,7 +381,7 @@ On 2012 (never seen in training), the baseline XGBoost's **total weekly sales** 
 * the RAG retrieves the right facts (last year, next holiday, active promotions, past error at the same season), puts every number in the prompt, removes the model's hidden reasoning (`<think>`) and streams the answer from a **fake Ollama server** started in the tests.
 
 ```bash
-python -m pytest     # 46 tests, ~6 seconds, no Kaggle data and no LLM needed
+python -m pytest     # 67 tests, ~8 seconds, no Kaggle data and no LLM needed
 ```
 
 Shifting the lag by a single week makes 5 of these tests fail.
@@ -384,6 +418,8 @@ The ensemble improves the real test score by 6%, confirming the direction seen o
 | `shap`             | Model explainability             |
 | `plotly`           | Interactive EDA visualizations   |
 | `streamlit`        | Web app deployment               |
+| `langgraph`, `langchain-ollama` | SQL agent (agentic AI) |
+| `duckdb`           | In-memory read-only SQL database for the agent |
 | Docker             | Containerized app                |
 | `joblib`           | Model serialization              |
 | CUDA (RTX 5070)      | GPU acceleration for model comparison |

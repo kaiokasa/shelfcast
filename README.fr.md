@@ -49,6 +49,7 @@ Une application web interactive permet d'explorer les données et de faire des p
 * **📊 Onglet EDA** : graphiques Plotly interactifs (ventes par semaine, ventes par type de magasin, comparaison d'une année sur l'autre, effet des jours fériés, promotions et ventes)
 * **📈 Onglet Model Performance** : WMAE, MAE et R² sur l'année de validation avec les fêtes, ventes réelles et prédites pour toute la chaîne et pour n'importe quel couple magasin/département, importance des variables
 * **🔮 Onglet Predict** : on choisit un magasin, un département et **n'importe quelle date** (passée, ou future jusqu'en 2040). Les informations du magasin, les facteurs externes et les ventes passées sont remplis automatiquement. Après la fin des données, les facteurs externes sont estimés, les ventes passées viennent de la même semaine de l'année la plus récente disponible (alignée sur les fêtes : Thanksgiving 2016 est comparé à Thanksgiving 2011), et l'explication de l'IA précise que la prévision est moins sûre à mesure qu'on s'éloigne. Ensuite, la combinaison prédit les ventes de la semaine (avec le détail des parts LightGBM et naïve saisonnière), et un **assistant IA explique la prédiction** (voir ci-dessous)
+* **💬 Onglet Ask the data** : on pose une question en anglais ; un agent IA écrit et exécute du SQL pour y répondre, en affichant chaque requête (voir ci-dessous)
 
 **Lancer le projet :**
 
@@ -110,6 +111,37 @@ Résultats détaillés dans `evaluation/rag_evaluation_qwen3.5_9b.csv`. Limite :
 python evaluate_rag.py                     # 200 cas avec le plus petit modèle installé
 python evaluate_rag.py --model qwen3.5:27b --n 50
 python evaluate_rag.py --recheck           # revérifie les explications enregistrées sans rappeler le LLM
+```
+
+---
+
+## 💬 Interroger les données : agent SQL (IA agentique avec LangGraph)
+
+L'onglet **💬 Ask the data** répond à des questions ouvertes sur les données (« Quels sont les 5 magasins qui ont le plus vendu pendant les semaines de Thanksgiving ? ») grâce à un **agent construit avec LangGraph** qui écrit et exécute lui-même du SQL (`walmart_agent.py`) :
+
+```
+question -> [agent] --appel d'outil--> [tools] --résultat ou erreur--> [agent] --> ... --brouillon--> [review]
+               ^                                                                                       |
+               +--------------------------------- problèmes trouvés -----------------------------------+
+                                                                                  approuvé --> réponse
+```
+
+* **agent** : le LLM local (Ollama) décide de la suite, avec 3 outils : `list_tables`, `describe_table` et `run_sql`. Quand une requête échoue, il lit l'erreur et corrige sa requête.
+* **revue** : avant de répondre, une vérification automatique contrôle que **chaque chiffre de la réponse apparaît dans un résultat de requête** (un chiffre calculé par le LLM lui-même doit être calculé en SQL), puis le LLM relit la logique (grain des données, moyennes hebdomadaires, périodes alignées). Chaque réponse est revue au plus deux fois.
+* **couche sémantique** : en plus des tables brutes, `store_weeks` (une ligne par magasin et par semaine, départements déjà additionnés) et `holiday_weeks` (le nom de chaque semaine de fête) évitent les erreurs les plus fréquentes d'un petit modèle.
+* **sécurité** : les CSV sont chargés dans une **base DuckDB en mémoire, puis l'accès aux fichiers est coupé et la configuration verrouillée**. Une seule requête `SELECT` est acceptée (pas d'`INSERT`, `DELETE`, `DROP`, `COPY` ni `SET`), les résultats sont limités à 50 lignes, une requête répétée est refusée et le nombre d'étapes est plafonné.
+* **transparence** : chaque requête SQL et son résultat sont affichés dans l'application, pour pouvoir vérifier la réponse.
+
+**Évaluation** (`evaluate_agent.py`) : 10 questions dont la réponse attendue est recalculée par une requête SQL de référence à chaque exécution.
+
+| Modèle | Réponses correctes | Temps médian |
+| --- | --- | --- |
+| qwen3.5:9b | **10 / 10** (9 / 10 avant l'ajout de la règle « chaque magasin n'apparaît qu'une fois dans un classement ») | 6 s |
+
+Limites : 10 questions forment un petit test, une règle a été ajoutée après avoir vu un échec sur ce test, et un LLM peut varier d'une exécution à l'autre. Les questions ambiguës (par exemple la croissance entre deux années, quand les périodes peuvent être découpées de plusieurs façons) peuvent recevoir des réponses différentes mais valables. `qwen3.5:27b` a été testé : il n'était pas plus précis, et 10 à 20 fois plus lent.
+
+```bash
+python evaluate_agent.py --model qwen3.5:9b
 ```
 
 ---
@@ -205,7 +237,9 @@ shelfcast/
 ├── walmart_features.py     # calcul des variables, partagé par le notebook et l'application
 ├── walmart_explain.py      # explication RAG d'une prédiction (recherche + LLM local via Ollama + vérification de fidélité)
 ├── evaluate_rag.py         # mesure les chiffres inventés dans les explications sur 200 prédictions au hasard
-├── evaluation/             # résultats de l'évaluation, une ligne par explication
+├── walmart_agent.py        # agent SQL construit avec LangGraph (base DuckDB en lecture seule, étape de revue)
+├── evaluate_agent.py       # mesure la précision de l'agent sur des questions à réponse SQL de référence
+├── evaluation/             # résultats des évaluations (explications RAG et agent SQL)
 ├── tests/                  # tests unitaires de walmart_features.py (python -m pytest)
 ├── app.py                  # application Streamlit (exploration, performance, prédiction)
 ├── walmart_lgbm_model.pkl  # partie LightGBM du modèle final, entraînée sur toutes les données (2,9 Mo)
@@ -348,7 +382,7 @@ Sur 2012 (jamais vu à l'entraînement), le **total des ventes hebdomadaires** p
 * le RAG récupère les bons faits (l'an dernier, la prochaine fête, les promotions en cours, l'erreur passée à la même période), met chaque chiffre dans le prompt, retire le raisonnement caché du modèle (`<think>`) et transmet la réponse mot par mot depuis un **faux serveur Ollama** lancé dans les tests.
 
 ```bash
-python -m pytest     # 46 tests, environ 6 secondes, sans les données Kaggle ni LLM
+python -m pytest     # 67 tests, environ 8 secondes, sans les données Kaggle ni LLM
 ```
 
 Décaler le décalage d'une seule semaine fait échouer 5 de ces tests.
@@ -385,6 +419,8 @@ La combinaison améliore le score réel de 6 %, ce qui confirme le sens du gain 
 | `shap`               | Explicabilité du modèle                        |
 | `plotly`             | Graphiques interactifs                         |
 | `streamlit`          | Application web                                |
+| `langgraph`, `langchain-ollama` | Agent SQL (IA agentique) |
+| `duckdb`             | Base SQL en mémoire, en lecture seule, pour l'agent |
 | Docker               | Application conteneurisée                      |
 | `joblib`             | Sauvegarde du modèle                           |
 | CUDA (RTX 5070)      | Accélération GPU pour la comparaison des modèles |

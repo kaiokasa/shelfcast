@@ -17,7 +17,7 @@ WORKDIR /app
 COPY requirements-app.txt .
 RUN pip install -r requirements-app.txt
 
-COPY app.py walmart_features.py walmart_explain.py walmart_lgbm_model.pkl model_validation.csv.gz ./
+COPY app.py walmart_features.py walmart_explain.py walmart_agent.py walmart_lgbm_model.pkl model_validation.csv.gz ./
 
 # The Kaggle data is not part of the image: mount it at /app/Data (see docker-compose.yml)
 RUN useradd --create-home appuser && mkdir -p /app/Data && chown -R appuser /app
