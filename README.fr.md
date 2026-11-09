@@ -46,7 +46,7 @@ Une application web interactive permet d'explorer les données et de faire des p
 
 * **📊 Onglet EDA** : graphiques Plotly interactifs (ventes par semaine, ventes par type de magasin, comparaison d'une année sur l'autre, effet des jours fériés, promotions et ventes)
 * **📈 Onglet Model Performance** : WMAE, MAE et R² sur l'année de validation avec les fêtes, ventes réelles et prédites pour toute la chaîne et pour n'importe quel couple magasin/département, importance des variables
-* **🔮 Onglet Predict** : on choisit un magasin, un département et une semaine (passée ou future). Les informations du magasin, les facteurs externes et les ventes de l'an dernier sont remplis automatiquement, puis la combinaison prédit les ventes de la semaine (avec le détail des parts LightGBM et naïve saisonnière), et un **assistant IA explique la prédiction** (voir ci-dessous)
+* **🔮 Onglet Predict** : on choisit un magasin, un département et **n'importe quelle date** (passée, ou future jusqu'en 2040). Les informations du magasin, les facteurs externes et les ventes passées sont remplis automatiquement. Après la fin des données, les facteurs externes sont estimés, les ventes passées viennent de la même semaine de l'année la plus récente disponible (alignée sur les fêtes : Thanksgiving 2016 est comparé à Thanksgiving 2011), et l'application prévient que la prévision est moins sûre à mesure qu'on s'éloigne. Ensuite, la combinaison prédit les ventes de la semaine (avec le détail des parts LightGBM et naïve saisonnière), et un **assistant IA explique la prédiction** (voir ci-dessous)
 
 **Lancer le projet :**
 

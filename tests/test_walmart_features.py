@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from walmart_features import (MARKDOWN_COLS, add_lag_features, build_base_features, predict_ensemble,
-                              seasonal_naive, svd_denoise, wmae)
+from walmart_features import (MARKDOWN_COLS, add_lag_features, build_base_features, features_for_week,
+                              holiday_week, predict_ensemble, reference_week, seasonal_naive, svd_denoise, week_ending, wmae)
 
 
 def sales(rows):
@@ -122,6 +122,66 @@ def test_base_features_fill_missing_markdowns_and_encode_holiday():
     assert result["IsHoliday"].iloc[0] == 0
     assert result["Year"].iloc[0] == 2011
     assert result["Week_Of_Year"].iloc[0] == 47
+
+
+# ---------------------------------------------------------------- any date
+
+def test_holiday_rules_match_the_kaggle_dates():
+    kaggle = {"Thanksgiving": ["2010-11-26", "2011-11-25", "2012-11-23", "2013-11-29"],
+              "Christmas": ["2010-12-31", "2011-12-30", "2012-12-28", "2013-12-27"],
+              "SuperBowl": ["2010-02-12", "2011-02-11", "2012-02-10", "2013-02-08"],
+              "LaborDay": ["2010-09-10", "2011-09-09", "2012-09-07", "2013-09-06"]}
+    for name, dates in kaggle.items():
+        for date in dates:
+            assert holiday_week(name, pd.Timestamp(date).year) == pd.Timestamp(date), (name, date)
+
+
+def test_holiday_rules_work_after_the_data():
+    assert holiday_week("Thanksgiving", 2025) == pd.Timestamp("2025-11-28")  # Thursday Nov 27
+    assert holiday_week("SuperBowl", 2025) == pd.Timestamp("2025-02-14")     # Sunday Feb 9 (2nd Sunday since 2022)
+    assert holiday_week("Christmas", 2020) == pd.Timestamp("2020-12-25")     # Christmas on a Friday
+    assert holiday_week("LaborDay", 2020) == pd.Timestamp("2020-09-11")      # Monday Sep 7
+
+
+def test_week_ending_is_the_friday_of_the_week():
+    assert week_ending("2025-11-24") == pd.Timestamp("2025-11-28")  # Monday -> Friday
+    assert week_ending("2025-11-28") == pd.Timestamp("2025-11-28")  # already a Friday
+
+
+def test_reference_week_stays_aligned_on_holidays_years_later():
+    # one year back: exactly 52 weeks, as in training
+    assert reference_week("2012-11-23", 1) == pd.Timestamp("2011-11-25")
+    # Thanksgiving moves: a fixed 104-week step from Thanksgiving 2014 would land on 2012-11-30, a week too late
+    assert reference_week("2014-11-28", 2) == pd.Timestamp("2012-11-23")
+    # December weeks follow Christmas (the closest holiday), not Thanksgiving
+    assert reference_week("2013-12-20", 2) == pd.Timestamp("2011-12-23")
+    # early January follows the previous Christmas
+    assert reference_week("2014-01-03", 3) == pd.Timestamp("2011-01-07")
+    # a week far from any holiday follows real years
+    assert reference_week("2016-06-17", 4) == pd.Timestamp("2012-06-15")
+
+
+def test_lags_reach_back_to_the_most_recent_year_only_when_allowed():
+    history = sales([(1, 1, "2010-11-26", 100.0)])
+    rows = sales([(1, 1, "2012-11-23", 0.0)])  # 104 weeks later: no sales 52 weeks before
+
+    assert add_lag_features(rows, history=history)["Sales_Lag_52"].isna().all()
+    assert add_lag_features(rows, history=history, max_years_back=3)["Sales_Lag_52"].iloc[0] == 100.0
+
+
+def test_unknown_weeks_get_estimated_external_features():
+    fs = make_feature_store(["2012-11-23", "2013-07-26"])
+    fs.loc[0, "Temperature"], fs.loc[1, "CPI"] = 40.0, 230.0
+
+    row, estimated = features_for_week(1, pd.Timestamp("2015-11-27"), fs)  # Thanksgiving week 2015
+
+    assert estimated
+    assert row["Temperature"] == 40.0            # same week (Thanksgiving 2012) of the most recent year that has it
+    assert row["CPI"] == 230.0                   # last known value
+    assert row["IsHoliday"]
+    assert not features_for_week(1, pd.Timestamp("2015-11-20"), fs)[0]["IsHoliday"]
+    _, estimated_known = features_for_week(1, pd.Timestamp("2012-11-23"), fs)
+    assert not estimated_known
 
 
 # ---------------------------------------------------------------- svd_denoise

@@ -86,6 +86,31 @@ def test_retrieval_reports_model_gap_and_unknown_actual(facts):
     assert facts["actual_sales_if_known"] is None
 
 
+def test_far_future_uses_the_most_recent_year_and_says_it_is_less_certain(history, validation):
+    # 2013-11-01 is 4 weeks before Thanksgiving 2013. Nothing is recorded one year earlier; two years earlier,
+    # 4 weeks before Thanksgiving 2011 is 2011-10-28, which is in the history ($30,000)
+    week = ["2013-11-01"]
+    row = build_base_features(pd.DataFrame({"Store": 1, "Dept": 1, "Date": week, "IsHoliday": False}),
+                              feature_store(week))
+    facts = retrieve_facts(row, 39000.0, 40000.0, 38000.0, history=history, validation=validation,
+                           estimated_factors=True)
+
+    assert facts["same_week_last_year"] == 30000.0
+    assert facts["same_week_reference_year"] == 2011
+    assert facts["same_week_years_back"] == 2
+    assert facts["weeks_after_last_recorded_sales"] == 105
+    prompt = build_prompt(facts)
+    assert "Same week in 2011 (the most recent year with recorded sales): $30,000" in prompt
+    assert "105 weeks after the last recorded sales (2011-10-28)" in prompt
+    assert "are estimates, not recorded values" in prompt
+    assert "less certain" in template_explanation(facts)
+
+
+def test_near_term_forecast_has_no_uncertainty_warning(facts):
+    assert facts["weeks_after_last_recorded_sales"] == 1
+    assert "after the last recorded sales" not in build_prompt(facts)
+
+
 # ---------------------------------------------------------------- augmentation & fallback
 
 def test_prompt_contains_every_retrieved_number(facts):
@@ -101,7 +126,7 @@ def test_comparisons_are_computed_by_the_code_not_the_llm(facts):
     assert facts["forecast_vs_usual_pct"] == 30.0
     assert facts["next_holiday"]["vs_this_forecast_pct"] == -48.7
     prompt = build_prompt(facts)
-    assert "The forecast is 2.5% lower than last year" in prompt
+    assert "The forecast is 2.5% lower than the same week last year" in prompt
     assert "The forecast is 30.0% higher than usual" in prompt
     assert "in the Thanksgiving week, 48.7% lower than this week's forecast" in prompt
 

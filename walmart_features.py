@@ -16,13 +16,70 @@ DATA_DIR = Path(__file__).parent / "Data"
 
 MARKDOWN_COLS = ["MarkDown1", "MarkDown2", "MarkDown3", "MarkDown4", "MarkDown5"]
 
-# Friday of each holiday week (Walmart weeks in the dataset end on a Friday)
-HOLIDAYS = {
-    "Thanksgiving": {2010: "2010-11-26", 2011: "2011-11-25", 2012: "2012-11-23", 2013: "2013-11-29"},
-    "Christmas":    {2010: "2010-12-31", 2011: "2011-12-30", 2012: "2012-12-28", 2013: "2013-12-27"},
-    "SuperBowl":    {2010: "2010-02-12", 2011: "2011-02-11", 2012: "2012-02-10", 2013: "2013-02-08"},
-    "LaborDay":     {2010: "2010-09-10", 2011: "2011-09-09", 2012: "2012-09-07", 2013: "2013-09-06"},
-}
+HOLIDAY_NAMES = ["Thanksgiving", "Christmas", "SuperBowl", "LaborDay"]
+
+
+def holiday_week(name, year):
+    """
+    Friday ending the holiday week (Walmart weeks in the dataset end on a Friday), for any year.
+    Matches the dates given by Kaggle for 2010-2013 (checked in the tests).
+    """
+    if name == "Thanksgiving":  # 4th Thursday of November; the week ends the next day
+        nov1 = pd.Timestamp(year, 11, 1)
+        return nov1 + pd.Timedelta(days=(3 - nov1.weekday()) % 7) + pd.Timedelta(weeks=3, days=1)
+    if name == "Christmas":     # the Friday on or after December 25
+        dec25 = pd.Timestamp(year, 12, 25)
+        return dec25 + pd.Timedelta(days=(4 - dec25.weekday()) % 7)
+    if name == "SuperBowl":     # 1st Sunday of February until 2021, 2nd Sunday since 2022; week ends 5 days later
+        feb1 = pd.Timestamp(year, 2, 1)
+        sunday = feb1 + pd.Timedelta(days=(6 - feb1.weekday()) % 7) + pd.Timedelta(weeks=1 if year >= 2022 else 0)
+        return sunday + pd.Timedelta(days=5)
+    if name == "LaborDay":      # 1st Monday of September; week ends 4 days later
+        sep1 = pd.Timestamp(year, 9, 1)
+        return sep1 + pd.Timedelta(days=(0 - sep1.weekday()) % 7) + pd.Timedelta(days=4)
+    raise ValueError(f"Unknown holiday: {name}")
+
+
+# Friday of each holiday week, 2010-2040 (holiday_week() works for any year)
+HOLIDAYS = {name: {y: holiday_week(name, y).strftime("%Y-%m-%d") for y in range(2010, 2041)}
+            for name in HOLIDAY_NAMES}
+
+
+def weeks_back(years):
+    """Number of weeks closest to `years` real years (52, 104, 157, 209, 261...)."""
+    return round(365.25 * years / 7)
+
+
+def reference_week(week, years):
+    """
+    The same week `years` years earlier.
+    - One year back: exactly 52 weeks, the lag the model was trained with.
+    - Further back, a fixed 52-week step drifts by about a day per year, and Thanksgiving itself moves by up to
+      a week from one year to the next. So weeks within 4 weeks of a holiday keep the same distance to that
+      holiday ("2 weeks before Thanksgiving"), and the other weeks follow real years.
+    """
+    week = pd.Timestamp(week)
+    if years == 1:
+        return week - pd.Timedelta(weeks=52)
+    # the closest holiday, looking at the surrounding years too (early January is close to last Christmas)
+    nearby = [(abs(days), days, name, shift)
+              for name in HOLIDAY_NAMES for shift in (-1, 0, 1)
+              for days in [(holiday_week(name, week.year + shift) - week).days] if abs(days) <= 28]
+    if nearby:
+        _, days, name, shift = min(nearby)
+        return holiday_week(name, week.year + shift - years) - pd.Timedelta(days=days)
+    return week - pd.Timedelta(weeks=weeks_back(years))
+
+
+def week_ending(date):
+    """The Friday that ends the Walmart week containing `date`."""
+    d = pd.Timestamp(date).normalize()
+    return d + pd.Timedelta(days=(4 - d.weekday()) % 7)
+
+
+def is_holiday_week(week):
+    week = pd.Timestamp(week)
+    return any(holiday_week(name, week.year) == week for name in HOLIDAY_NAMES)
 
 BASE_FEATURES = ["Store", "Dept", "IsHoliday", "Temperature", "Fuel_Price", *MARKDOWN_COLS,
                  "CPI", "Unemployment", "Type", "Size", "Year", "Week_Of_Year",
@@ -51,34 +108,47 @@ def build_base_features(df, feature_store):
     df["Date"] = pd.to_datetime(df["Date"])
     df["Year"] = df["Date"].dt.year
     df["Week_Of_Year"] = df["Date"].dt.isocalendar().week.astype(int)
-    for name, dates in HOLIDAYS.items():
-        ref = df["Year"].map({y: pd.Timestamp(d) for y, d in dates.items()})
+    for name in HOLIDAY_NAMES:
+        ref = df["Year"].map({y: holiday_week(name, y) for y in df["Year"].unique()})
         df[f"Days_to_{name}"] = (ref - df["Date"]).dt.days
     df[MARKDOWN_COLS] = df[MARKDOWN_COLS].fillna(0)
     df["IsHoliday"] = df["IsHoliday"].astype(int)
     return df.sort_values(["Store", "Dept", "Date"]).reset_index(drop=True)
 
 
-def add_lag_features(df, history, stats_source=None):
+def add_lag_features(df, history, stats_source=None, max_years_back=1):
     """
     Add 52+ week lags and store/department sales levels.
 
-    df:           rows to enrich (needs Store, Dept, Date)
-    history:      known sales (Store, Dept, Date, Weekly_Sales) the lags are read from
-    stats_source: rows used for the store/department mean/median (defaults to history).
-                  Must only contain data known at training time to avoid leakage.
+    df:             rows to enrich (needs Store, Dept, Date)
+    history:        known sales (Store, Dept, Date, Weekly_Sales) the lags are read from
+    stats_source:   rows used for the store/department mean/median (defaults to history).
+                    Must only contain data known at training time to avoid leakage.
+    max_years_back: 1 (training, validation, Kaggle test) = exactly one year earlier.
+                    For dates further in the future, the same week of the most recent year with recorded
+                    sales is used instead (up to max_years_back years earlier).
     """
     stats_source = history if stats_source is None else stats_source
     df = df.copy()
-    hist = history[["Store", "Dept", "Date", "Weekly_Sales"]]
-    for k in LAG_WEEKS:
-        shifted = (hist.assign(Date=hist["Date"] + pd.Timedelta(weeks=k))
-                   .rename(columns={"Weekly_Sales": f"lag_{k}"}))
-        df = df.merge(shifted, on=["Store", "Dept", "Date"], how="left")
-    lag_cols = [f"lag_{k}" for k in LAG_WEEKS]
-    df["Sales_Lag_52"] = df["lag_52"]
-    df["Sales_Lag_52_Mean4"] = df[lag_cols].mean(axis=1)
-    df = df.drop(columns=lag_cols)
+    hist = history[["Store", "Dept", "Date", "Weekly_Sales"]].rename(columns={"Date": "RefDate"})
+    keys = df[["Store", "Dept", "Date"]].reset_index(drop=True)
+    lag_52 = lag_mean4 = None
+    for years in range(1, max_years_back + 1):
+        # the same week `years` years earlier (exactly 52 weeks for one year, see reference_week)
+        ref = keys["Date"].map({d: reference_week(d, years) for d in keys["Date"].unique()})
+        lags = {}
+        for k in LAG_WEEKS:
+            lookup = keys[["Store", "Dept"]].assign(RefDate=ref - pd.Timedelta(weeks=k - 52))
+            lags[k] = lookup.merge(hist, on=["Store", "Dept", "RefDate"], how="left")["Weekly_Sales"].to_numpy()
+        lags = pd.DataFrame(lags)
+        this_52, this_mean4 = lags[52].to_numpy(), lags.mean(axis=1).to_numpy()
+        if lag_52 is None:
+            lag_52, lag_mean4 = this_52, this_mean4
+        else:  # only fill the weeks that have no more recent value
+            lag_52 = np.where(np.isnan(lag_52), this_52, lag_52)
+            lag_mean4 = np.where(np.isnan(lag_mean4), this_mean4, lag_mean4)
+    df["Sales_Lag_52"] = lag_52
+    df["Sales_Lag_52_Mean4"] = lag_mean4
 
     stats = (stats_source.groupby(["Store", "Dept"])["Weekly_Sales"]
              .agg(Store_Dept_Mean="mean", Store_Dept_Median="median").reset_index())
@@ -123,20 +193,55 @@ def svd_denoise(history, k=SVD_RANK):
     return pd.concat(parts, ignore_index=True)[["Store", "Dept", "Date", "Weekly_Sales"]]
 
 
-def seasonal_naive(rows, denoised_history):
+def seasonal_naive(rows, denoised_history, max_years_back=1):
     """Same week last year (denoised), falling back on the store/department mean."""
-    v = add_lag_features(rows[["Store", "Dept", "Date"]], history=denoised_history)
+    v = add_lag_features(rows[["Store", "Dept", "Date"]], history=denoised_history, max_years_back=max_years_back)
     return v["Sales_Lag_52"].fillna(v["Store_Dept_Mean"]).fillna(0).to_numpy()
 
 
-def predict_ensemble(model, rows, history, denoised_history):
+def predict_ensemble(model, rows, history, denoised_history, max_years_back=1):
     """
     rows: output of build_base_features (no lag features yet).
+    max_years_back > 1 lets the app predict any future date (see add_lag_features).
     Returns (ensemble, lightgbm, seasonal_naive) predictions, aligned with rows.
     """
-    lgbm_pred = model.predict(add_lag_features(rows, history=history)[FEATURES])
-    naive_pred = seasonal_naive(rows, denoised_history)
+    lgbm_pred = model.predict(add_lag_features(rows, history=history, max_years_back=max_years_back)[FEATURES])
+    naive_pred = seasonal_naive(rows, denoised_history, max_years_back=max_years_back)
     return LGBM_WEIGHT * lgbm_pred + (1 - LGBM_WEIGHT) * naive_pred, lgbm_pred, naive_pred
+
+
+# --- Predicting any week, including weeks after the end of features.csv (July 2013) ---
+
+SEASONAL_FACTORS = ["Temperature", *MARKDOWN_COLS]   # repeat the same week of the most recent known year
+TREND_FACTORS = ["Fuel_Price", "CPI", "Unemployment"]  # keep the last known value
+
+
+def features_for_week(store, week, feature_store):
+    """
+    The external features of one store for one week, in the format of feature_store.
+    Known weeks come from features.csv. Other weeks are estimated, and `estimated` is True:
+    seasonal factors repeat the same week of the most recent year that has them, economic
+    factors keep their last known value.
+    """
+    fs = feature_store[feature_store["Store"] == store].copy()
+    fs["Date"] = pd.to_datetime(fs["Date"])
+    week = pd.Timestamp(week)
+    known = fs[fs["Date"] == week]
+    if len(known):
+        return known.iloc[0].to_dict(), False
+
+    fs = fs.sort_values("Date").set_index("Date")
+    row = {"Store": store, "Date": week, "IsHoliday": is_holiday_week(week),
+           "Type": fs["Type"].iloc[-1], "Size": fs["Size"].iloc[-1]}
+    # the same week in past years, most recent first, aligned like the lags (see reference_week)
+    past_weeks = [reference_week(week, y) for y in range(1, 31)]
+    for col in SEASONAL_FACTORS:
+        known_values = [fs.at[d, col] for d in past_weeks if d in fs.index and pd.notna(fs.at[d, col])]
+        row[col] = known_values[0] if known_values else (fs[col].dropna().iloc[-1] if fs[col].notna().any() else np.nan)
+    for col in TREND_FACTORS:
+        values = fs[col].dropna()
+        row[col] = values.iloc[-1] if len(values) else np.nan
+    return row, True
 
 
 def wmae(y_true, y_pred, is_holiday):

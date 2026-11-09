@@ -45,7 +45,7 @@ An interactive web app is included to explore the data and make predictions.
 
 * **📊 EDA tab**: interactive Plotly charts: weekly sales trends, sales by store type, year-over-year comparison, holiday impact, and markdown vs sales
 * **📈 Model Performance tab**: WMAE / MAE / R² on the holiday-aware validation year, actual vs predicted sales for the whole chain and for any store/department, feature importance
-* **🔮 Predict tab**: pick a store, a department and a week (past or future): store info, external factors and last year's sales are filled in automatically, then the ensemble predicts the weekly sales (with the LightGBM and seasonal naive parts shown), and an **AI assistant explains the prediction** (see below)
+* **🔮 Predict tab**: pick a store, a department and **any date** (past, or future up to 2040): store info, external factors and past sales are filled in automatically. After the end of the data, external factors are estimated, past sales come from the same week of the most recent year with data (aligned on holidays: Thanksgiving 2016 is compared with Thanksgiving 2011), and the app warns that the forecast is less certain the further ahead it goes. The ensemble then predicts the weekly sales (with the LightGBM and seasonal naive parts shown), and an **AI assistant explains the prediction** (see below)
 
 **How to run:**
 

@@ -7,10 +7,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from walmart_explain import (build_prompt, choose_model, retrieve_facts, stream_explanation,
-                             template_explanation)
-from walmart_features import (DATA_DIR, HOLIDAYS, LGBM_WEIGHT, MARKDOWN_COLS, SVD_RANK, add_lag_features,
-                              build_base_features, load_raw, predict_ensemble, svd_denoise, wmae)
+from walmart_explain import (MAX_YEARS_BACK, build_prompt, choose_model, retrieve_facts, stream_explanation,
+                             template_explanation, when)
+from walmart_features import (DATA_DIR, HOLIDAYS, LGBM_WEIGHT, MARKDOWN_COLS, SVD_RANK, build_base_features,
+                              features_for_week, load_raw, predict_ensemble, svd_denoise, week_ending, wmae)
 
 
 def escape_dollars(text):
@@ -176,25 +176,31 @@ with tab2:
 
 with tab3:
     st.subheader("Predict Weekly Sales")
-    st.caption("Pick a store, a department and a week: store info, external factors and last year's "
-               "sales are filled in automatically from the dataset.")
+    st.caption("Pick a store, a department and any date: the week ending on the following Friday is predicted. "
+               "Store info, external factors and past sales are filled in automatically.")
 
     col1, col2, col3 = st.columns(3)
     store = col1.selectbox("Store", sorted(df["Store"].unique()))
     dept = col2.selectbox("Department", sorted(df.loc[df["Store"] == store, "Dept"].unique()))
-    store_weeks = feature_store.loc[feature_store["Store"] == store].sort_values("Date")
     last_known = df["Date"].max()
-    week = col3.selectbox(
-        "Week (ending Friday)", store_weeks["Date"].tolist(),
-        index=int((store_weeks["Date"] <= last_known).sum()),  # first week after the known history
-        format_func=lambda d: d.strftime("%Y-%m-%d") + ("" if d <= last_known else "  (future)"),
-    )
+    picked = col3.date_input("Week (any date)", value=(last_known + pd.Timedelta(weeks=1)).date(),
+                             min_value=df["Date"].min().date(), max_value=pd.Timestamp("2040-12-31").date())
+    week = week_ending(picked)
 
-    week_info = store_weeks.loc[store_weeks["Date"] == week].iloc[0]
-    st.markdown(f"**Store type** {week_info['Type']} · **Size** {week_info['Size']:,} sq ft · "
-                f"**Holiday week** {'yes' if week_info['IsHoliday'] else 'no'}")
+    week_info, estimated = features_for_week(store, week, feature_store)
+    weeks_ahead = max(0, (week - last_known).days // 7)
+    st.markdown(f"**Week ending** {week.date()} · **Store type** {week_info['Type']} · "
+                f"**Size** {int(week_info['Size']):,} sq ft · **Holiday week** {'yes' if week_info['IsHoliday'] else 'no'}")
+    if estimated:
+        st.warning("This week is not in features.csv (which ends on 2013-07-26): temperature, fuel price, CPI, "
+                   "unemployment and promotions are **estimated** (same week of the most recent known year, "
+                   "or last known value). You can edit them below.")
+    if weeks_ahead > 52:
+        st.warning(f"This week is **{weeks_ahead} weeks after the last recorded sales** ({last_known.date()}). "
+                   "The forecast mostly repeats the pattern of the most recent year with data, so it becomes "
+                   "less certain the further ahead you go.")
 
-    with st.expander("External factors (pre-filled from features.csv, editable)"):
+    with st.expander(f"External factors ({'estimated' if estimated else 'from features.csv'}, editable)"):
         e1, e2 = st.columns(2)
         overrides = {}
         for i, col in enumerate(EXTERNAL_FACTORS):
@@ -205,26 +211,30 @@ with tab3:
                 col, value=None if pd.isna(default) else float(default),
                 key=f"{col}_{store}_{week.date()}")
 
-    row = pd.DataFrame({"Store": [store], "Dept": [dept], "Date": [week.strftime("%Y-%m-%d")],
-                        "IsHoliday": [bool(week_info["IsHoliday"])]})
-    raw_store = feature_store.assign(Date=feature_store["Date"].dt.strftime("%Y-%m-%d"))
-    row = build_base_features(row, raw_store)
+    week_key = {"Date": week.strftime("%Y-%m-%d"), "IsHoliday": bool(week_info["IsHoliday"])}
+    row = build_base_features(pd.DataFrame([{"Store": store, "Dept": dept, **week_key}]),
+                              pd.DataFrame([{**week_info, **week_key}]))
     for col, value in overrides.items():
         row[col] = np.nan if value is None else value
 
     if st.button("Predict Weekly Sales 🚀"):
-        ensemble, lgbm_part, naive_part = predict_ensemble(model, row, history=df, denoised_history=denoised_history)
+        ensemble, lgbm_part, naive_part = predict_ensemble(model, row, history=df, denoised_history=denoised_history,
+                                                           max_years_back=MAX_YEARS_BACK)
         prediction = ensemble[0]
         # "\$" escapes the dollar sign: two "$" in a Markdown string would be rendered as a LaTeX formula
         st.success(f"### Predicted Weekly Sales: **\\${prediction:,.2f}**")
         st.caption(f"= {LGBM_WEIGHT:.0%} × LightGBM (\\${lgbm_part[0]:,.0f}) + {1 - LGBM_WEIGHT:.0%} × "
                    f"seasonal naive (\\${naive_part[0]:,.0f})")
 
-        lags = add_lag_features(row, history=df)
+        facts = retrieve_facts(row, prediction, lgbm_part[0], naive_part[0], history=df, validation=val,
+                               estimated_factors=estimated)
         m1, m2, m3 = st.columns(3)
-        lag = lags["Sales_Lag_52"].iloc[0]
-        m1.metric("Same week last year", "n/a" if pd.isna(lag) else f"${lag:,.0f}")
-        m2.metric("Store/Dept average", f"${lags['Store_Dept_Mean'].iloc[0]:,.0f}")
+        same_week = facts["same_week_last_year"]
+        m1.metric(f"Same week {when(facts['same_week_years_back'], facts['same_week_reference_year'])}"
+                  if same_week is not None else "Same week, past years",
+                  "n/a" if same_week is None else f"${same_week:,.0f}")
+        m2.metric("Store/Dept average", "n/a" if facts["usual_weekly_sales"] is None
+                  else f"${facts['usual_weekly_sales']:,.0f}")
         actual = df.loc[(df["Store"] == store) & (df["Dept"] == dept) & (df["Date"] == week), "Weekly_Sales"]
         if len(actual):
             m3.metric("Actual sales", f"${actual.iloc[0]:,.0f}",
@@ -236,7 +246,6 @@ with tab3:
 
         # ---- RAG: explain the prediction (retrieval -> prompt -> local LLM, or template fallback)
         st.markdown("#### 🤖 Why this prediction?")
-        facts = retrieve_facts(row, prediction, lgbm_part[0], naive_part[0], history=df, validation=val)
         cache = st.session_state.setdefault("explanations", {})
         key = (store, dept, facts["week_ending"], facts["prediction"])
 

@@ -17,7 +17,7 @@ import urllib.request
 
 import pandas as pd
 
-from walmart_features import HOLIDAYS, MARKDOWN_COLS
+from walmart_features import HOLIDAYS, MARKDOWN_COLS, reference_week
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL")
@@ -37,12 +37,16 @@ SYSTEM_PROMPT = (
 
 # ---------------------------------------------------------------- 1. retrieval
 
-def retrieve_facts(row, prediction, lgbm_part, naive_part, history, validation):
+MAX_YEARS_BACK = 30  # how far back to look for the same week when predicting far in the future
+
+
+def retrieve_facts(row, prediction, lgbm_part, naive_part, history, validation, estimated_factors=False):
     """
     row:        one row of build_base_features output (the week being predicted)
     prediction, lgbm_part, naive_part: the ensemble prediction and its two components
     history:    known sales with base features (Store, Dept, Date, Weekly_Sales, ...)
     validation: held-out predictions (model_validation.csv.gz) to measure past errors
+    estimated_factors: True when the external features of this week are estimates (see features_for_week)
     """
     r = row.iloc[0] if isinstance(row, pd.DataFrame) else row
     store, dept, week = int(r["Store"]), int(r["Dept"]), pd.Timestamp(r["Date"])
@@ -52,13 +56,23 @@ def retrieve_facts(row, prediction, lgbm_part, naive_part, history, validation):
         s = hist.loc[hist["Date"] == date, "Weekly_Sales"]
         return round(float(s.iloc[0]), 2) if len(s) else None
 
-    # the closest holiday in the next 8 weeks, and what this department sold that week last year
+    def most_recent_same_week(date):
+        """Sales of the same week in the most recent year that has them, that year, and how many years back."""
+        for years in range(1, MAX_YEARS_BACK + 1):
+            reference = reference_week(date, years)
+            value = sales_on(reference)
+            if value is not None:
+                return value, reference.year, years
+        return None, None, None
+
+    # the closest holiday in the next 8 weeks, and what this department sold that week in the most recent year
     upcoming = sorted((int(r[f"Days_to_{h}"]), h) for h in HOLIDAYS if 0 <= r[f"Days_to_{h}"] <= 56)
     next_holiday = None
     if upcoming:
         days, name = upcoming[0]
+        sales, year, years_back = most_recent_same_week(week + pd.Timedelta(days=days))
         next_holiday = {"name": HOLIDAY_NAMES[name], "days_away": days,
-                        "sales_that_week_last_year": sales_on(week + pd.Timedelta(days=days) - pd.Timedelta(weeks=52))}
+                        "sales_that_week_last_year": sales, "reference_year": year, "years_back": years_back}
 
     # typical error of the model for this store/department at the same time of year (+-4 weeks)
     v = validation[(validation["Store"] == store) & (validation["Dept"] == dept)]
@@ -71,7 +85,8 @@ def retrieve_facts(row, prediction, lgbm_part, naive_part, history, validation):
                                      / near["Weekly_Sales"].abs().sum() * 100), 1)
 
     mean_parts = (lgbm_part + naive_part) / 2
-    last_year = sales_on(week - pd.Timedelta(weeks=52))
+    last_year, last_year_reference, last_year_years_back = most_recent_same_week(week)
+    last_recorded = pd.Timestamp(history["Date"].max())
     usual = round(float(hist["Weekly_Sales"].mean()), 2) if len(hist) else None
 
     def pct_vs(reference, value=prediction):
@@ -93,7 +108,12 @@ def retrieve_facts(row, prediction, lgbm_part, naive_part, history, validation):
         "seasonal_naive_part": round(float(naive_part), 2),
         "gap_between_models_pct": round(abs(lgbm_part - naive_part) / mean_parts * 100, 1) if mean_parts else None,
         "same_week_last_year": last_year,
+        "same_week_reference_year": last_year_reference,
+        "same_week_years_back": last_year_years_back,
         "forecast_vs_last_year_pct": pct_vs(last_year),
+        "last_recorded_sales": last_recorded.strftime("%Y-%m-%d"),
+        "weeks_after_last_recorded_sales": max(0, (week - last_recorded).days // 7),
+        "external_factors_estimated": bool(estimated_factors),
         "usual_weekly_sales": usual,
         "forecast_vs_usual_pct": pct_vs(usual),
         "next_holiday": next_holiday,
@@ -119,6 +139,16 @@ def compared(pct, reference):
     return f"{abs(pct)}% {'higher' if pct > 0 else 'lower'} than {reference}"
 
 
+def when(years_back, year):
+    """'last year' for the previous year, otherwise 'in 2012' (the most recent year with recorded sales)."""
+    return "last year" if years_back == 1 else f"in {year}"
+
+
+def holiday_timing(h):
+    """'This is the Thanksgiving week' or 'Thanksgiving is in 21 days'."""
+    return f"This is the {h['name']} week" if h["days_away"] == 0 else f"{h['name']} is in {h['days_away']} days"
+
+
 def build_prompt(facts):
     f = facts
     lines = [
@@ -129,18 +159,21 @@ def build_prompt(facts):
         f"seasonal forecast {money(f['seasonal_naive_part'])}; they differ by {f['gap_between_models_pct']}%)",
     ]
     if f["same_week_last_year"] is not None:
-        lines.append(f"- Same week last year: {money(f['same_week_last_year'])}. The forecast is "
-                     f"{compared(f['forecast_vs_last_year_pct'], 'last year')}")
+        ref = when(f["same_week_years_back"], f["same_week_reference_year"])
+        note = "" if f["same_week_years_back"] == 1 else " (the most recent year with recorded sales)"
+        lines.append(f"- Same week {ref}{note}: {money(f['same_week_last_year'])}. The forecast is "
+                     f"{compared(f['forecast_vs_last_year_pct'], 'the same week ' + ref)}")
     if f["usual_weekly_sales"] is not None:
         lines.append(f"- Usual weekly sales of this department in this store: {money(f['usual_weekly_sales'])}. "
                      f"The forecast is {compared(f['forecast_vs_usual_pct'], 'usual')}")
     if f["next_holiday"]:
         h = f["next_holiday"]
-        line = f"- {h['name']} is in {h['days_away']} days"
+        line = f"- {holiday_timing(h)}"
         if h["sales_that_week_last_year"] is not None:
             this_forecast = "this week's forecast"
-            line += (f". Last year, this department sold {money(h['sales_that_week_last_year'])} in the "
-                     f"{h['name']} week, {compared(h['vs_this_forecast_pct'], this_forecast)}")
+            ref = when(h["years_back"], h["reference_year"])
+            line += (f". {ref[0].upper() + ref[1:]}, this department sold {money(h['sales_that_week_last_year'])} "
+                     f"in the {h['name']} week, {compared(h['vs_this_forecast_pct'], this_forecast)}")
         lines.append(line)
     if f["active_promotions"]:
         promos = ", ".join(f"{k} {money(v)}" for k, v in f["active_promotions"].items())
@@ -152,6 +185,13 @@ def build_prompt(facts):
                      f"{f['past_error_pct_same_season']}%")
     if f["actual_sales_if_known"] is not None:
         lines.append(f"- Actual sales that week (already known): {money(f['actual_sales_if_known'])}")
+    if f["weeks_after_last_recorded_sales"] > 52:
+        lines.append(f"- This week is {f['weeks_after_last_recorded_sales']} weeks after the last recorded sales "
+                     f"({f['last_recorded_sales']}): the forecast assumes the pattern of "
+                     f"{f['same_week_reference_year']} repeats, so it is less certain than a short-term forecast")
+    if f["external_factors_estimated"]:
+        lines.append("- Temperature, fuel price, CPI, unemployment and promotions for this week are estimates, "
+                     "not recorded values")
     return "Facts:\n" + "\n".join(lines) + "\n\nExplain this forecast."
 
 
@@ -164,10 +204,11 @@ def template_explanation(facts):
     if ly:
         change = (f["prediction"] - ly) / ly * 100
         trend = "close to" if abs(change) < 5 else ("above" if change > 0 else "below")
-        parts.append(f"It is {trend} the same week last year ({money(ly)}, {change:+.0f}%).")
+        ref = when(f["same_week_years_back"], f["same_week_reference_year"])
+        parts.append(f"It is {trend} the same week {ref} ({money(ly)}, {change:+.0f}%).")
     if f["next_holiday"]:
         h = f["next_holiday"]
-        parts.append(f"{h['name']} is in {h['days_away']} days.")
+        parts.append(f"{holiday_timing(h)}.")
     if f["active_promotions"]:
         parts.append(f"{len(f['active_promotions'])} promotion(s) are active this week.")
     gap = f["gap_between_models_pct"]
@@ -177,6 +218,9 @@ def template_explanation(facts):
     if f["past_error_pct_same_season"] is not None:
         parts.append(f"At this time of year, the model's typical error for this department is "
                      f"{f['past_error_pct_same_season']}%.")
+    if f["weeks_after_last_recorded_sales"] > 52:
+        parts.append(f"This week is {f['weeks_after_last_recorded_sales']} weeks after the last recorded sales, "
+                     f"so the forecast mostly repeats the {f['same_week_reference_year']} pattern and is less certain.")
     return " ".join(parts)
 
 
