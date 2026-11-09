@@ -94,6 +94,24 @@ OLLAMA_MODEL=qwen3.5:27b streamlit run app.py   # optionnel : forcer un autre mo
 
 Avec Docker, le conteneur accède à Ollama qui tourne sur la machine hôte (`OLLAMA_HOST` dans `docker-compose.yml`).
 
+### Vérification de fidélité
+
+Après chaque explication, `verify_numbers()` extrait tous les nombres écrits par le LLM (en chiffres ou en lettres, par exemple « twenty-one ») et vérifie qu'ils viennent bien des faits récupérés, en tolérant les arrondis normaux. Si un chiffre n'est pas dans les faits, l'explication de l'IA est **remplacée par la version construite à partir des modèles de phrases** et les chiffres inventés sont listés ; sinon, l'application affiche « ✓ Every figure was checked against the facts ».
+
+**Évaluation** (`evaluate_rag.py`, 200 prédictions tirées au hasard avec une graine fixe : 1/3 de semaines passées, 1/3 de la période de test Kaggle, 1/3 de semaines futures de 2014 à 2020) :
+
+| Modèle | Explications sans chiffre inventé | Temps médian |
+| --- | --- | --- |
+| qwen3.5:9b | **200 / 200 (100 %)** | 5,4 s |
+
+Résultats détaillés dans `evaluation/rag_evaluation_qwen3.5_9b.csv`. Limite : la vérification confirme qu'un nombre existe dans les faits, pas qu'il est utilisé au bon endroit. Dans un cas sur 200, « over five years ago » (un nombre calculé par le modèle lui-même) est passé uniquement parce que la semaine comptait aussi 5 promotions. Les erreurs d'interprétation sans nombre (par exemple « Thanksgiving peut faire monter les ventes » pour un département qui vend moins cette semaine-là) ne sont pas détectées non plus ; il faudrait pour cela un second LLM jouant le rôle de juge.
+
+```bash
+python evaluate_rag.py                     # 200 cas avec le plus petit modèle installé
+python evaluate_rag.py --model qwen3.5:27b --n 50
+python evaluate_rag.py --recheck           # revérifie les explications enregistrées sans rappeler le LLM
+```
+
 ---
 
 ## 💡 À retenir
@@ -185,7 +203,9 @@ shelfcast/
 ├── Notebook.ipynb          # exploration, variables, modèles, évaluation, soumission
 ├── Notebook_Experiments.ipynb  # validation avec les fêtes, décalages, réentraînement sur toutes les données
 ├── walmart_features.py     # calcul des variables, partagé par le notebook et l'application
-├── walmart_explain.py      # explication RAG d'une prédiction (recherche + LLM local via Ollama)
+├── walmart_explain.py      # explication RAG d'une prédiction (recherche + LLM local via Ollama + vérification de fidélité)
+├── evaluate_rag.py         # mesure les chiffres inventés dans les explications sur 200 prédictions au hasard
+├── evaluation/             # résultats de l'évaluation, une ligne par explication
 ├── tests/                  # tests unitaires de walmart_features.py (python -m pytest)
 ├── app.py                  # application Streamlit (exploration, performance, prédiction)
 ├── walmart_lgbm_model.pkl  # partie LightGBM du modèle final, entraînée sur toutes les données (2,9 Mo)
@@ -328,7 +348,7 @@ Sur 2012 (jamais vu à l'entraînement), le **total des ventes hebdomadaires** p
 * le RAG récupère les bons faits (l'an dernier, la prochaine fête, les promotions en cours, l'erreur passée à la même période), met chaque chiffre dans le prompt, retire le raisonnement caché du modèle (`<think>`) et transmet la réponse mot par mot depuis un **faux serveur Ollama** lancé dans les tests.
 
 ```bash
-python -m pytest     # 28 tests, environ 5 secondes, sans les données Kaggle ni LLM
+python -m pytest     # 46 tests, environ 6 secondes, sans les données Kaggle ni LLM
 ```
 
 Décaler le décalage d'une seule semaine fait échouer 5 de ces tests.

@@ -12,6 +12,7 @@ Configuration (environment variables):
 """
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -222,6 +223,78 @@ def template_explanation(facts):
         parts.append(f"This week is {f['weeks_after_last_recorded_sales']} weeks after the last recorded sales, "
                      f"so the forecast mostly repeats the {f['same_week_reference_year']} pattern and is less certain.")
     return " ".join(parts)
+
+
+# ---------------------------------------------------------------- faithfulness check
+
+UNITS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+         "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+         "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19}
+TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+# "twenty-one" / "twenty one" = 21, "seven" = 7. A lone "one" is not counted: in English it is almost always
+# a pronoun ("one of the models", "a short-term one"), and it was the only false alarm on 200 explanations.
+STANDALONE_WORDS = [w for w in UNITS if w != "one"]
+WORD_NUMBER_PATTERN = re.compile(
+    rf"\b(?:({'|'.join(TENS)})(?:[- ]({'|'.join(list(UNITS)[1:10])}))?|({'|'.join(STANDALONE_WORDS)}))\b",
+    re.IGNORECASE)
+
+# a number that is not part of a word or an identifier (MarkDown3, Qwen3.5...)
+NUMBER_PATTERN = re.compile(r"(?<![A-Za-z\d.,])\$?\d[\d,]*(?:\.\d+)?%?(?![A-Za-z\d])")
+
+
+def allowed_numbers(facts):
+    """Every number the explanation is allowed to contain: the facts, plus the dates and counts they imply."""
+    values = set()
+
+    def collect(item):
+        if isinstance(item, bool):
+            return
+        if isinstance(item, (int, float)):
+            values.update({float(item), abs(float(item))})  # the prompt writes "6.4% lower", not "-6.4%"
+        elif isinstance(item, dict):
+            for value in item.values():
+                collect(value)
+        elif isinstance(item, (list, tuple)):
+            for value in item:
+                collect(value)
+        elif isinstance(item, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", item):
+            year, month, day = (int(p) for p in item.split("-"))
+            values.update({float(year), float(month), float(day)})
+
+    collect(facts)
+    values.add(float(len(facts.get("active_promotions") or {})))  # "five promotions"
+    values.add(2.0)  # "the two models"
+    return values
+
+
+def extract_numbers(text):
+    """(raw text, value) for every number written in the explanation, in digits or in words."""
+    found = []
+    for match in NUMBER_PATTERN.finditer(text):
+        raw = match.group().rstrip(".,")
+        value = float(raw.replace("$", "").replace("%", "").replace(",", ""))
+        found.append((raw, value))
+    for match in WORD_NUMBER_PATTERN.finditer(text):
+        tens, unit, alone = (g.lower() if g else None for g in match.groups())
+        value = TENS[tens] + (UNITS[unit] if unit else 0) if tens else UNITS[alone]
+        found.append((match.group(), float(value)))
+    return found
+
+
+def verify_numbers(text, facts):
+    """
+    Faithfulness check: every number of the explanation must come from the facts.
+    Rounding is tolerated (half a unit, or 0.5% for large amounts: $39,457 for 39456.85 is fine),
+    anything else is reported: "$14,000" when the promotions total $18,342, "210 weeks" when it is 213.
+    Returns (ok, list of unsupported numbers as written).
+    """
+    allowed = allowed_numbers(facts)
+    unsupported = []
+    for raw, value in extract_numbers(text):
+        tolerance = max(0.5, 0.005 * abs(value))
+        if not any(abs(value - a) <= tolerance for a in allowed):
+            unsupported.append(raw)
+    return not unsupported, unsupported
 
 
 # ---------------------------------------------------------------- 3. generation (Ollama)

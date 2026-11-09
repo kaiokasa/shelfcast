@@ -130,10 +130,14 @@ def add_lag_features(df, history, stats_source=None, max_years_back=1):
     """
     stats_source = history if stats_source is None else stats_source
     df = df.copy()
-    hist = history[["Store", "Dept", "Date", "Weekly_Sales"]].rename(columns={"Date": "RefDate"})
     keys = df[["Store", "Dept", "Date"]].reset_index(drop=True)
+    # only the stores/departments being enriched (a no-op for training, a big speed-up for one prediction)
+    hist = history.loc[history["Store"].isin(keys["Store"].unique()) & history["Dept"].isin(keys["Dept"].unique()),
+                       ["Store", "Dept", "Date", "Weekly_Sales"]].rename(columns={"Date": "RefDate"})
     lag_52 = lag_mean4 = None
     for years in range(1, max_years_back + 1):
+        if lag_52 is not None and not (np.isnan(lag_52).any() or np.isnan(lag_mean4).any()):
+            break  # every week already has its most recent value: older years would change nothing
         # the same week `years` years earlier (exactly 52 weeks for one year, see reference_week)
         ref = keys["Date"].map({d: reference_week(d, years) for d in keys["Date"].unique()})
         lags = {}

@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from walmart_explain import (build_prompt, choose_model, installed_models, retrieve_facts, stream_explanation,
-                             strip_thinking, template_explanation)
+                             strip_thinking, template_explanation, verify_numbers)
 from walmart_features import MARKDOWN_COLS, build_base_features
 
 
@@ -136,6 +136,45 @@ def test_template_explanation_works_without_llm(facts):
     assert "$39,000" in text
     assert "close to the same week last year" in text
     assert "Thanksgiving is in 21 days" in text
+
+
+# ---------------------------------------------------------------- faithfulness check
+
+def test_faithful_explanation_passes(facts):
+    text = ("The forecast of $39,000 is 2.5% lower than the same week last year ($40,000). "
+            "Thanksgiving is in twenty-one days, and MarkDown1 is active. The typical error is 10.0%.")
+    assert verify_numbers(text, facts) == (True, [])
+
+
+def test_rounding_is_tolerated(facts):
+    # 39,000 written for 39000.0, 30% for 30.0, "$30,000" for a 30000.0 usual level
+    assert verify_numbers("About $39,000, 30% above the usual $30,000.", facts)[0]
+
+
+def test_invented_numbers_are_reported(facts):
+    ok, unsupported = verify_numbers("Promotions totaling over $14,000 and a pattern from 210 weeks ago.", facts)
+    assert not ok
+    assert unsupported == ["$14,000", "210"]
+
+
+def test_numbers_inside_identifiers_are_ignored(facts):
+    assert verify_numbers("MarkDown3 and MarkDown5 are not numbers.", facts) == (True, [])
+
+
+def test_numbers_written_in_words_are_checked(facts):
+    assert verify_numbers("Thanksgiving is in twenty-one days.", facts)[0]
+    ok, unsupported = verify_numbers("Thanksgiving is in forty-five days.", facts)
+    assert not ok and unsupported == ["forty-five"]
+
+
+def test_one_as_a_pronoun_is_not_a_number(facts):
+    # the only false alarm of the 200-case evaluation: "less certain than a short-term one"
+    assert verify_numbers("The forecast is less certain than a short-term one.", facts) == (True, [])
+    assert verify_numbers("Thanksgiving is in twenty-one days.", facts)[0]  # "-one" inside 21 still counts
+
+
+def test_the_template_explanation_always_passes_the_check(facts):
+    assert verify_numbers(template_explanation(facts), facts) == (True, [])
 
 
 # ---------------------------------------------------------------- generation

@@ -93,6 +93,24 @@ OLLAMA_MODEL=qwen3.5:27b streamlit run app.py   # optional: force another model
 
 With Docker, the container reaches Ollama running on the host machine (`OLLAMA_HOST` in `docker-compose.yml`).
 
+### Faithfulness check
+
+After each explanation, `verify_numbers()` extracts every number the LLM wrote (in digits or in words, e.g. "twenty-one") and checks that it comes from the retrieved facts, tolerating normal rounding. If a figure is not in the facts, the AI explanation is **replaced by the template one** and the invented figures are listed; otherwise the app shows "✓ Every figure was checked against the facts".
+
+**Evaluation** (`evaluate_rag.py`, 200 random predictions with a fixed seed: 1/3 past weeks, 1/3 Kaggle test period, 1/3 future weeks 2014 to 2020):
+
+| Model | Explanations with no invented figure | Median time |
+| --- | --- | --- |
+| qwen3.5:9b | **200 / 200 (100%)** | 5.4 s |
+
+Results per case in `evaluation/rag_evaluation_qwen3.5_9b.csv`. Limit: the check confirms that a number exists in the facts, not that it is used in the right place. In one case out of 200, "over five years ago" (a number the model computed itself) passed only because the week also had 5 promotions. Wrong interpretations without a number (e.g. "Thanksgiving may push sales up" for a department that sells less that week) are not caught either; that would need an LLM-as-a-judge.
+
+```bash
+python evaluate_rag.py                     # 200 cases with the smallest installed model
+python evaluate_rag.py --model qwen3.5:27b --n 50
+python evaluate_rag.py --recheck           # re-verify saved explanations without calling the LLM
+```
+
 ---
 
 ## 💡 Key Takeaways
@@ -184,7 +202,9 @@ shelfcast/
 ├── Notebook.ipynb          # EDA, feature engineering, modeling, evaluation, submission
 ├── Notebook_Experiments.ipynb  # holiday-aware validation, lag features, retraining on all data
 ├── walmart_features.py     # feature engineering shared by the notebook and the app
-├── walmart_explain.py      # RAG explanation of a prediction (retrieval + local LLM via Ollama)
+├── walmart_explain.py      # RAG explanation of a prediction (retrieval + local LLM via Ollama + faithfulness check)
+├── evaluate_rag.py         # measures invented figures in the explanations over 200 random predictions
+├── evaluation/             # evaluation results, one row per explanation
 ├── tests/                  # unit tests for walmart_features.py (python -m pytest)
 ├── app.py                  # Streamlit app (EDA, model performance, prediction)
 ├── walmart_lgbm_model.pkl  # LightGBM component of the final ensemble, trained on all data (2.9 MB)
@@ -327,7 +347,7 @@ On 2012 (never seen in training), the baseline XGBoost's **total weekly sales** 
 * the RAG retrieves the right facts (last year, next holiday, active promotions, past error at the same season), puts every number in the prompt, removes the model's hidden reasoning (`<think>`) and streams the answer from a **fake Ollama server** started in the tests.
 
 ```bash
-python -m pytest     # 28 tests, ~5 seconds, no Kaggle data and no LLM needed
+python -m pytest     # 46 tests, ~6 seconds, no Kaggle data and no LLM needed
 ```
 
 Shifting the lag by a single week makes 5 of these tests fail.
