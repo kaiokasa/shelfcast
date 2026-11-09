@@ -45,7 +45,7 @@ An interactive web app is included to explore the data and make predictions.
 
 * **📊 EDA tab**: interactive Plotly charts: weekly sales trends, sales by store type, year-over-year comparison, holiday impact, and markdown vs sales
 * **📈 Model Performance tab**: WMAE / MAE / R² on the holiday-aware validation year, actual vs predicted sales for the whole chain and for any store/department, feature importance
-* **🔮 Predict tab**: pick a store, a department and a week (past or future): store info, external factors and last year's sales are filled in automatically, then the ensemble predicts the weekly sales (with the LightGBM and seasonal naive parts shown)
+* **🔮 Predict tab**: pick a store, a department and a week (past or future): store info, external factors and last year's sales are filled in automatically, then the ensemble predicts the weekly sales (with the LightGBM and seasonal naive parts shown), and an **AI assistant explains the prediction** (see below)
 
 **How to run:**
 
@@ -70,6 +70,26 @@ Then open `http://localhost:8501` in your browser.
 docker compose up -d --build     # build the image and start the app on http://localhost:8501
 docker compose down              # stop it
 ```
+
+---
+
+## 🤖 AI explanation of each prediction (RAG)
+
+After each prediction, the app **automatically explains it in plain language**, using Retrieval-Augmented Generation (`walmart_explain.py`):
+
+1. **Retrieval**: the facts behind the prediction are gathered from the data: last year's sales for the same week, the usual sales level, the next holiday and what this department sold that week last year, active promotions, and the model's typical error at this time of year (from the held-out validation).
+2. **Augmentation**: these facts are put into a prompt that forbids the LLM to invent or compute any number.
+3. **Generation**: a **local LLM served by [Ollama](https://ollama.com)** writes the explanation, streamed word by word. No API key and no cost.
+
+Every number comes from the data, never from the LLM, and the retrieved facts are shown under the explanation so they can be checked. **Without Ollama, the app still works**: a simpler explanation is built from the same facts with templates.
+
+```bash
+# optional: install Ollama, then pull a model
+ollama pull qwen3:8b            # any model works; the first installed one is used by default
+OLLAMA_MODEL=qwen3:8b streamlit run app.py   # optional: choose the model explicitly
+```
+
+With Docker, the container reaches Ollama running on the host machine (`OLLAMA_HOST` in `docker-compose.yml`).
 
 ---
 
@@ -162,6 +182,7 @@ Walmart_Weekly_Sales_Forecast/
 ├── Notebook.ipynb          # EDA, feature engineering, modeling, evaluation, submission
 ├── Notebook_Experiments.ipynb  # holiday-aware validation, lag features, retraining on all data
 ├── walmart_features.py     # feature engineering shared by the notebook and the app
+├── walmart_explain.py      # RAG explanation of a prediction (retrieval + local LLM via Ollama)
 ├── tests/                  # unit tests for walmart_features.py (python -m pytest)
 ├── app.py                  # Streamlit app (EDA, model performance, prediction)
 ├── walmart_lgbm_model.pkl  # LightGBM component of the final ensemble, trained on all data (2.9 MB)
@@ -300,10 +321,11 @@ On 2012 (never seen in training), the baseline XGBoost's **total weekly sales** 
 * lags and store/department statistics only read the history they are given (**no future data leaks**),
 * holiday distances are 0 on the holiday week, missing MarkDowns become 0,
 * the SVD with all components returns the original sales and never invents unobserved weeks,
-* the ensemble is exactly 50% LightGBM + 50% seasonal naive, and the WMAE weighs holiday weeks 5×.
+* the ensemble is exactly 50% LightGBM + 50% seasonal naive, and the WMAE weighs holiday weeks 5×,
+* the RAG retrieves the right facts (last year, next holiday, active promotions, past error at the same season), puts every number in the prompt, removes the model's hidden reasoning (`<think>`) and streams the answer from a **fake Ollama server** started in the tests.
 
 ```bash
-python -m pytest     # 16 tests, ~2 seconds, no Kaggle data needed
+python -m pytest     # 28 tests, ~5 seconds, no Kaggle data and no LLM needed
 ```
 
 Shifting the lag by a single week makes 5 of these tests fail.

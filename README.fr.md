@@ -46,7 +46,7 @@ Une application web interactive permet d'explorer les données et de faire des p
 
 * **📊 Onglet EDA** : graphiques Plotly interactifs (ventes par semaine, ventes par type de magasin, comparaison d'une année sur l'autre, effet des jours fériés, promotions et ventes)
 * **📈 Onglet Model Performance** : WMAE, MAE et R² sur l'année de validation avec les fêtes, ventes réelles et prédites pour toute la chaîne et pour n'importe quel couple magasin/département, importance des variables
-* **🔮 Onglet Predict** : on choisit un magasin, un département et une semaine (passée ou future). Les informations du magasin, les facteurs externes et les ventes de l'an dernier sont remplis automatiquement, puis la combinaison prédit les ventes de la semaine (avec le détail des parts LightGBM et naïve saisonnière)
+* **🔮 Onglet Predict** : on choisit un magasin, un département et une semaine (passée ou future). Les informations du magasin, les facteurs externes et les ventes de l'an dernier sont remplis automatiquement, puis la combinaison prédit les ventes de la semaine (avec le détail des parts LightGBM et naïve saisonnière), et un **assistant IA explique la prédiction** (voir ci-dessous)
 
 **Lancer le projet :**
 
@@ -71,6 +71,26 @@ Ouvrez ensuite `http://localhost:8501` dans votre navigateur.
 docker compose up -d --build     # construit l'image et lance l'application sur http://localhost:8501
 docker compose down              # l'arrête
 ```
+
+---
+
+## 🤖 Explication de chaque prédiction par l'IA (RAG)
+
+Après chaque prédiction, l'application **l'explique automatiquement en langage clair**, grâce au RAG, la génération augmentée par la recherche (`walmart_explain.py`) :
+
+1. **Recherche** : les faits derrière la prédiction sont extraits des données : ventes de la même semaine l'an dernier, niveau habituel des ventes, prochaine fête et ventes de ce département cette semaine-là l'an dernier, promotions en cours, et erreur habituelle du modèle à cette période de l'année (d'après la validation).
+2. **Augmentation** : ces faits sont placés dans un prompt qui interdit au LLM d'inventer ou de calculer un nombre.
+3. **Génération** : un **LLM local servi par [Ollama](https://ollama.com)** rédige l'explication, affichée mot par mot. Pas de clé API, pas de coût.
+
+Tous les chiffres viennent des données, jamais du LLM, et les faits utilisés sont affichés sous l'explication pour pouvoir les vérifier. **Sans Ollama, l'application fonctionne quand même** : une explication plus simple est construite à partir des mêmes faits, avec des modèles de phrases.
+
+```bash
+# optionnel : installer Ollama, puis télécharger un modèle
+ollama pull qwen3:8b            # n'importe quel modèle convient ; le premier installé est utilisé par défaut
+OLLAMA_MODEL=qwen3:8b streamlit run app.py   # optionnel : choisir le modèle explicitement
+```
+
+Avec Docker, le conteneur accède à Ollama qui tourne sur la machine hôte (`OLLAMA_HOST` dans `docker-compose.yml`).
 
 ---
 
@@ -163,6 +183,7 @@ Walmart_Weekly_Sales_Forecast/
 ├── Notebook.ipynb          # exploration, variables, modèles, évaluation, soumission
 ├── Notebook_Experiments.ipynb  # validation avec les fêtes, décalages, réentraînement sur toutes les données
 ├── walmart_features.py     # calcul des variables, partagé par le notebook et l'application
+├── walmart_explain.py      # explication RAG d'une prédiction (recherche + LLM local via Ollama)
 ├── tests/                  # tests unitaires de walmart_features.py (python -m pytest)
 ├── app.py                  # application Streamlit (exploration, performance, prédiction)
 ├── walmart_lgbm_model.pkl  # partie LightGBM du modèle final, entraînée sur toutes les données (2,9 Mo)
@@ -301,10 +322,11 @@ Sur 2012 (jamais vu à l'entraînement), le **total des ventes hebdomadaires** p
 * les décalages et les statistiques par magasin/département ne lisent que l'historique fourni (**aucune fuite de données futures**),
 * la distance aux fêtes vaut 0 la semaine fériée, et les promotions manquantes deviennent 0,
 * la SVD avec toutes ses composantes redonne les ventes d'origine et n'invente jamais de semaines non observées,
-* la combinaison vaut exactement 50 % LightGBM + 50 % naïve saisonnière, et le WMAE donne bien un poids de 5 aux semaines fériées.
+* la combinaison vaut exactement 50 % LightGBM + 50 % naïve saisonnière, et le WMAE donne bien un poids de 5 aux semaines fériées,
+* le RAG récupère les bons faits (l'an dernier, la prochaine fête, les promotions en cours, l'erreur passée à la même période), met chaque chiffre dans le prompt, retire le raisonnement caché du modèle (`<think>`) et transmet la réponse mot par mot depuis un **faux serveur Ollama** lancé dans les tests.
 
 ```bash
-python -m pytest     # 16 tests, environ 2 secondes, sans les données Kaggle
+python -m pytest     # 28 tests, environ 5 secondes, sans les données Kaggle ni LLM
 ```
 
 Décaler le décalage d'une seule semaine fait échouer 5 de ces tests.

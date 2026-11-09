@@ -8,4 +8,11 @@ services:
     volumes:
       # Kaggle competition data, downloaded locally (see README), mounted read-only
       - ./Data:/app/Data:ro
+    environment:
+      # Ollama running on the host machine (optional: without it, the app uses template explanations)
+      OLLAMA_HOST: http://host.docker.internal:11434
+      # Model used for the explanations; empty = first model installed in Ollama
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
