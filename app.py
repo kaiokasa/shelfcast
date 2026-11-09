@@ -188,17 +188,8 @@ with tab3:
     week = week_ending(picked)
 
     week_info, estimated = features_for_week(store, week, feature_store)
-    weeks_ahead = max(0, (week - last_known).days // 7)
     st.markdown(f"**Week ending** {week.date()} · **Store type** {week_info['Type']} · "
                 f"**Size** {int(week_info['Size']):,} sq ft · **Holiday week** {'yes' if week_info['IsHoliday'] else 'no'}")
-    if estimated:
-        st.warning("This week is not in features.csv (which ends on 2013-07-26): temperature, fuel price, CPI, "
-                   "unemployment and promotions are **estimated** (same week of the most recent known year, "
-                   "or last known value). You can edit them below.")
-    if weeks_ahead > 52:
-        st.warning(f"This week is **{weeks_ahead} weeks after the last recorded sales** ({last_known.date()}). "
-                   "The forecast mostly repeats the pattern of the most recent year with data, so it becomes "
-                   "less certain the further ahead you go.")
 
     with st.expander(f"External factors ({'estimated' if estimated else 'from features.csv'}, editable)"):
         e1, e2 = st.columns(2)
