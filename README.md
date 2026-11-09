@@ -85,8 +85,8 @@ Every number comes from the data, never from the LLM, and the retrieved facts ar
 
 ```bash
 # optional: install Ollama, then pull a model
-ollama pull qwen3:8b            # any model works; the first installed one is used by default
-OLLAMA_MODEL=qwen3:8b streamlit run app.py   # optional: choose the model explicitly
+ollama pull qwen3.5:9b          # any model works; the smallest (fastest) installed one is used by default
+OLLAMA_MODEL=qwen3.5:27b streamlit run app.py   # optional: force another model
 ```
 
 With Docker, the container reaches Ollama running on the host machine (`OLLAMA_HOST` in `docker-compose.yml`).

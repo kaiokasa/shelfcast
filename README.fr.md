@@ -86,8 +86,8 @@ Tous les chiffres viennent des données, jamais du LLM, et les faits utilisés s
 
 ```bash
 # optionnel : installer Ollama, puis télécharger un modèle
-ollama pull qwen3:8b            # n'importe quel modèle convient ; le premier installé est utilisé par défaut
-OLLAMA_MODEL=qwen3:8b streamlit run app.py   # optionnel : choisir le modèle explicitement
+ollama pull qwen3.5:9b          # n'importe quel modèle convient ; le plus petit (le plus rapide) est utilisé par défaut
+OLLAMA_MODEL=qwen3.5:27b streamlit run app.py   # optionnel : forcer un autre modèle
 ```
 
 Avec Docker, le conteneur accède à Ollama qui tourne sur la machine hôte (`OLLAMA_HOST` dans `docker-compose.yml`).

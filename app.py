@@ -260,7 +260,7 @@ with tab3:
             else:
                 cache[key] = (template_explanation(facts),
                               "Simple explanation built from the facts below. Install Ollama and pull a model "
-                              "(e.g. `ollama pull qwen3:8b`) to get an AI-written explanation.")
+                              "(e.g. `ollama pull qwen3.5:9b`) to get an AI-written explanation.")
                 st.markdown(escape_dollars(cache[key][0]))
         else:
             st.markdown(escape_dollars(cache[key][0]))

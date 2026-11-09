@@ -8,7 +8,7 @@
 
 Configuration (environment variables):
     OLLAMA_HOST   default http://localhost:11434
-    OLLAMA_MODEL  e.g. "qwen3:8b"; if not set, the first model installed in Ollama is used
+    OLLAMA_MODEL  e.g. "qwen3.5:27b"; if not set, the smallest (fastest) installed model is used
 """
 import json
 import os
@@ -227,16 +227,21 @@ def template_explanation(facts):
 # ---------------------------------------------------------------- 3. generation (Ollama)
 
 def installed_models(host=OLLAMA_HOST, timeout=1.5):
-    """Names of the models installed in Ollama, or [] if Ollama is not reachable."""
+    """Names of the models installed in Ollama, smallest first, or [] if Ollama is not reachable."""
     try:
         with urllib.request.urlopen(f"{host}/api/tags", timeout=timeout) as resp:
-            return [m["name"] for m in json.load(resp).get("models", [])]
+            models = json.load(resp).get("models", [])
+        return [m["name"] for m in sorted(models, key=lambda m: m.get("size", 0))]
     except (urllib.error.URLError, OSError, ValueError):
         return []
 
 
 def choose_model(host=OLLAMA_HOST, preferred=OLLAMA_MODEL):
-    """The model to use: OLLAMA_MODEL if it is installed, otherwise the first installed one, or None."""
+    """
+    The model to use: OLLAMA_MODEL if it is installed, otherwise the smallest installed one (the fastest:
+    the explanation appears after every click, e.g. ~5 s with qwen3.5:9b vs ~1 min with qwen3.5:27b on an
+    8 GB GPU), or None.
+    """
     models = installed_models(host)
     if not models:
         return None

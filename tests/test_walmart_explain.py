@@ -183,6 +183,26 @@ def fake_ollama():
     server.shutdown()
 
 
+def test_default_model_is_the_smallest_installed_one():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            models = [{"name": "qwen3.5:27b", "size": 17_000_000_000}, {"name": "qwen3.5:9b", "size": 6_600_000_000}]
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps({"models": models}).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = start_server(Handler)
+    host = f"http://127.0.0.1:{server.server_port}"
+    try:
+        assert choose_model(host=host, preferred=None) == "qwen3.5:9b"           # fastest by default
+        assert choose_model(host=host, preferred="qwen3.5:27b") == "qwen3.5:27b"  # unless configured
+    finally:
+        server.shutdown()
+
+
 def test_choose_model_prefers_the_configured_one(fake_ollama):
     assert choose_model(host=fake_ollama, preferred="llama3") == "llama3:8b"
     assert choose_model(host=fake_ollama, preferred=None) == "qwen3:8b"
