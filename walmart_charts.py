@@ -137,11 +137,13 @@ def draw_chart(data, kind, x, y, title, theme="dark"):
         paper_bgcolor=t["surface"], plot_bgcolor=t["surface"],
         xaxis={**axis_style, **x_axis}, yaxis={**axis_style, **y_axis},
         showlegend=len(y_columns) > 1,  # a legend for 2+ series; one series is named by the title
+        # the zoom / export toolbar stands vertically on the right, so it never covers the title
+        modebar={"orientation": "v", "bgcolor": "rgba(0,0,0,0)", "color": t["muted"], "activecolor": t["ink"]},
         legend={"orientation": "h", "x": 0, "y": 1.02, "yanchor": "bottom", "font": {"color": t["secondary"]}},
         hovermode="x unified" if kind == "line" else "closest",
         hoverlabel={"bgcolor": t["tooltip"], "bordercolor": t["grid"], "font": {"color": t["ink"], "family": FONT}},
         bargap=0.45, bargroupgap=0.08, barcornerradius=4,
         height=max(320, 140 + 34 * bars) if kind == "barh" else 420,
-        margin={"l": 60, "r": 40, "t": 80 if len(y_columns) > 1 else 60, "b": 50},
+        margin={"l": 60, "r": 70, "t": 80 if len(y_columns) > 1 else 60, "b": 50},
     )
     return fig

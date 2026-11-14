@@ -71,6 +71,8 @@ How to work:
    columns: "line" for values over time (x = Date), "bar" for a few categories, "barh" for rankings with
    long labels, "scatter" for the relation between two numeric columns. Keep it readable (at most 30 bars).
    make_chart accepts up to 500 rows: for values over time, do not add a LIMIT (the whole period is wanted).
+   To compare several stores, departments or types on one chart, return one row per x and group and pass
+   series=<that column> (at most 8 groups): each group gets its own line or bar, with a legend.
    Then describe what the chart shows in your answer.
 
 Tables: {"; ".join(f"{name} ({note})" for name, note in TABLE_NOTES.items())}.
@@ -183,10 +185,12 @@ def make_tools(con):
         return shown if len(result) else "The query returned no rows."
 
     @tool(response_format="content_and_artifact")
-    def make_chart(query: str, kind: str, x: str, y: str, title: str) -> tuple[str, bytes | None]:
-        """Draw a chart with matplotlib from one read-only SELECT query.
+    def make_chart(query: str, kind: str, x: str, y: str, title: str, series: str = "") -> tuple[str, dict | None]:
+        """Draw an interactive chart from one read-only SELECT query.
         kind: "line", "bar", "barh" or "scatter". x: the column for the x axis (e.g. Date, Type, Store).
-        y: the numeric column(s) to plot, separated by commas. title: a short chart title."""
+        y: the numeric column(s) to plot, separated by commas. title: a short chart title.
+        series: optional column whose values become separate lines or bars (e.g. "Dept" for one line per
+        department); the query must then return one row per x and series value, and at most 8 series."""
         problem = check_query(con, query)
         if problem:
             return problem, None
@@ -202,6 +206,23 @@ def make_tools(con):
             return f"Unknown chart kind '{kind}'. Use one of: {', '.join(CHART_KINDS)}.", None
         if data.empty or len(data) > MAX_CHART_POINTS:
             return f"The query returned {len(data)} rows: a chart needs 1 to {MAX_CHART_POINTS}.", None
+        if series:
+            # long -> wide: one column per series value, e.g. Dept 92, Dept 95...
+            if series not in data.columns:
+                return f"Unknown series column '{series}'. The query returns: {list(data.columns)}.", None
+            if len(y_columns) != 1:
+                return "With series, give exactly one y column.", None
+            groups = data[series].nunique()
+            if groups > MAX_SERIES:
+                return (f"{groups} different {series} values: a chart shows at most {MAX_SERIES} series. Keep the "
+                        f"top {MAX_SERIES} (e.g. with a subquery) or aggregate."), None
+            data = data.pivot_table(index=x, columns=series, values=y_columns[0], aggfunc="sum").reset_index()
+            data.columns = [x, *[f"{series} {value}" for value in data.columns[1:]]]
+            y_columns = list(data.columns[1:])
+        elif kind != "scatter" and data[x].duplicated().any():
+            # several rows for the same x (e.g. several departments per month) would be drawn as one zigzag
+            return (f"Several rows share the same {x} value. Either aggregate to one row per {x} (GROUP BY {x}), "
+                    f"or pass series=<column> to draw one line or bar per value of that column."), None
         # the data is returned with the chart, so the agent describes it with real numbers: a summary of each
         # series (so it never has to compute a maximum or an average itself), then the first rows
         summary = []
@@ -226,6 +247,7 @@ def make_tools(con):
 
 CHART_KINDS = ["line", "bar", "barh", "scatter"]
 MAX_CHART_POINTS = 500
+MAX_SERIES = 8  # the validated palette has 8 categorical colors: never cycle them
 
 
 # ---------------------------------------------------------------- LangGraph agent

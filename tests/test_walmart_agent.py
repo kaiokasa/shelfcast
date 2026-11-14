@@ -140,6 +140,27 @@ def test_make_chart_refuses_writes_unknown_columns_and_kinds(tools):
     assert text.startswith("Unknown chart kind") and png is None
 
 
+def test_several_rows_per_x_are_refused_without_series(tools):
+    # two departments per date would be drawn as one zigzag line (the bug seen in the app)
+    text, spec = chart(tools, query="SELECT Date, Store, Weekly_Sales FROM sales", kind="line", x="Date",
+                       y="Weekly_Sales", title="t")
+    assert text.startswith("Several rows share the same Date value") and spec is None
+
+
+def test_series_draws_one_line_per_group(tools):
+    text, spec = chart(tools, query="SELECT Date, Store, Weekly_Sales FROM sales", kind="line", x="Date",
+                       y="Weekly_Sales", title="Sales by store", series="Store")
+    assert text.startswith("Chart created") and spec["y"] == ["Store 1", "Store 2"]
+    fig = draw_chart(**spec)
+    assert [trace.name for trace in fig.data] == ["Store 1", "Store 2"] and fig.layout.showlegend
+
+
+def test_more_series_than_colors_are_refused(tools):
+    text, spec = chart(tools, query="SELECT range % 3 AS x, range AS grp, range AS v FROM range(30)", kind="line",
+                       x="x", y="v", title="t", series="grp")
+    assert "at most 8 series" in text and spec is None
+
+
 def test_too_many_points_are_refused(tools):
     text, png = chart(tools, query="SELECT range AS x, range AS y FROM range(600)", kind="line", x="x", y="y",
                       title="t")
